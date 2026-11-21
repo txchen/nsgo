@@ -41,6 +41,11 @@ final class Box extends GradientDrawable {
         invalidateSelf();
     }
 
+    /** The look last applied to this box. */
+    Look look() {
+        return look;
+    }
+
     /** Writes the box's rounded shape in bounds b to path, in pixels, and returns it. */
     Path shape(Rect b, Path path) {
         path.reset();

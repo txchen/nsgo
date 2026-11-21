@@ -173,6 +173,68 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
     });
     /** Nodes reporting presses outside them, on the UI thread. */
     private final ArrayList<Node> outside = new ArrayList<>();
+    /** Mounted nodes whose style carries a backdrop filter, and their container ancestors, on the UI thread. */
+    private final HashSet<Node> backdropNodes = new HashSet<>();
+    private final HashSet<ViewGroup> backdropAncestors = new HashSet<>();
+    private final Object backdropState = Backdrop.createState();
+    private final Backdrop.Host backdropHost = new Backdrop.Host() {
+        @Override
+        public boolean hasBackdrop(View child) {
+            Node n = byView.get(child);
+            if (n == null) return false;
+            Look l = n.background != null ? n.background.look() : n.shown;
+            return l != null && l.hasBackdrop();
+        }
+
+        @Override
+        public Look backdropLook(View child) {
+            Node n = byView.get(child);
+            if (n == null) return null;
+            return n.background != null ? n.background.look() : n.shown;
+        }
+
+        @Override
+        public Box backdropBox(View child) {
+            Node n = byView.get(child);
+            return n != null ? n.background : null;
+        }
+
+        @Override
+        public boolean hasBackdropDescendant(View child) {
+            return child instanceof ViewGroup && backdropAncestors.contains(child);
+        }
+
+        @Override
+        public void setInherited(View child, Object source) {
+            if (child instanceof Group) {
+                Backdrop.setInherited(((Group) child).backdropState, source);
+            } else if (child instanceof Layer) {
+                Backdrop.setInherited(((Layer) child).backdropState, source);
+            } else if (child instanceof Content) {
+                Backdrop.setInherited(((Content) child).backdropState, source);
+            } else if (child instanceof ScrollFrame) {
+                Backdrop.setInherited(((ScrollFrame) child).backdropState, source);
+            } else if (child instanceof Scrolling.Scroller) {
+                ((Scrolling.Scroller) child).setInheritedBackdrop(source, source != null ? this : null);
+            }
+        }
+    };
+    private final Backdrop.Callbacks backdropCallbacks = new Backdrop.Callbacks() {
+        @Override
+        public void superDraw(Canvas canvas) {
+            NsgoView.super.draw(canvas);
+        }
+
+        @Override
+        public boolean drawChild(Canvas canvas, View child, long drawingTime) {
+            return NsgoView.this.drawChild(canvas, child, drawingTime);
+        }
+
+        @Override
+        public void superOnDrawForeground(Canvas canvas) {
+            NsgoView.super.onDrawForeground(canvas);
+        }
+    };
     private final int[] location = new int[2];
     private NsgoEngine engine;
     private final Set<Integer> displayHolds = new HashSet<>();
@@ -406,6 +468,61 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
                 }
             });
         }
+    }
+
+    @Override
+    public void draw(Canvas canvas) {
+        Backdrop.drawContainer(this, canvas, backdropHost, backdropCallbacks, backdropState);
+    }
+
+    /** Rebuilds the set of ViewGroups that hold a backdrop-filtered descendant, updating willNotDraw and invalidating changed containers. */
+    private void updateBackdropAncestors() {
+        HashSet<ViewGroup> prev = new HashSet<>(backdropAncestors);
+        backdropAncestors.clear();
+        for (Node n : backdropNodes) {
+            ViewParent p = n.view.getParent();
+            while (p instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) p;
+                backdropAncestors.add(g);
+                if (g == this) break;
+                p = g.getParent();
+            }
+        }
+        for (ViewGroup g : backdropAncestors) {
+            if (!prev.contains(g)) {
+                if (g == this || g instanceof Group || g instanceof Layer
+                        || g instanceof Content || g instanceof ScrollFrame) {
+                    g.setWillNotDraw(false);
+                }
+                g.invalidate();
+            }
+        }
+        for (ViewGroup g : prev) {
+            if (!backdropAncestors.contains(g)) {
+                releaseBackdropState(g);
+                g.invalidate();
+            }
+        }
+    }
+
+    private void releaseBackdropState(View view) {
+        if (view == this) {
+            Backdrop.release(backdropState);
+        } else if (view instanceof Group) {
+            Backdrop.release(((Group) view).backdropState);
+        } else if (view instanceof Layer) {
+            Backdrop.release(((Layer) view).backdropState);
+        } else if (view instanceof Content) {
+            Backdrop.release(((Content) view).backdropState);
+        } else if (view instanceof ScrollFrame) {
+            Backdrop.release(((ScrollFrame) view).backdropState);
+        }
+    }
+
+    private void releaseNodeBlurs(Node n) {
+        releaseBackdropState(n.view);
+        if (n.view instanceof ScrollFrame) ((ScrollFrame) n.view).scrollEdges.release();
+        if (n.children != null && n.children != n.view) releaseBackdropState(n.children);
     }
 
     @Override
@@ -804,6 +921,10 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         unregisterBack();
         // Overlays are the system's windows, not the activity's: nothing else removes them as the process ends, and they would stay above every app, frozen, with the service's notification.
         if (overlays != null) overlays.closeAll();
+        backdropNodes.clear();
+        backdropAncestors.clear();
+        Backdrop.release(backdropState);
+        for (int i = 0; i < nodes.size(); i++) releaseNodeBlurs(nodes.valueAt(i));
         destroyComponents();
     }
 
@@ -825,6 +946,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         files.shutdownNow();
         for (int i = 0; i < nodes.size(); i++) {
             Node n = nodes.valueAt(i);
+            releaseNodeBlurs(n);
             if (n.animator != null) n.animator.cancel();
             if (n.keyframer != null) n.keyframer.cancel();
             if (n.web != null) n.web.destroy();
@@ -835,6 +957,9 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         nodes.clear();
         byView.clear();
         outside.clear();
+        backdropNodes.clear();
+        backdropAncestors.clear();
+        Backdrop.release(backdropState);
         moving.clear();
     }
 
@@ -2760,6 +2885,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         // Under the accessory bar.
         addView(root, 0);
         rootView = root;
+        if (!backdropNodes.isEmpty()) updateBackdropAncestors();
     }
 
     /** Whether Android's reduce-motion setting, no animations, is on. */
@@ -2777,6 +2903,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
                 detach(n.view);
                 ViewGroup group = parent.children;
                 group.addView(n.view, before == null ? -1 : group.indexOfChild(before.view));
+                if (!backdropNodes.isEmpty()) updateBackdropAncestors();
                 if (n.modal >= 0 && !n.presented) {
                     n.presented = true;
                     present(n);
@@ -2793,6 +2920,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
             }
             case Protocol.ITEM_REMOVE:
                 detach(n.view);
+                if (!backdropNodes.isEmpty()) updateBackdropAncestors();
                 break;
             case Protocol.ITEM_DELETE:
                 // Dropping the node drops its views, its text layout and its
@@ -2800,6 +2928,9 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
                 if (!vanish(n) && !inGhost(n.view)) detach(n.view);
                 nodes.remove(n.id);
                 byView.remove(n.view);
+                releaseNodeBlurs(n);
+                boolean hadBackdrop = backdropNodes.remove(n);
+                if (hadBackdrop || !backdropAncestors.isEmpty()) updateBackdropAncestors();
                 if (n.laid != 0) shown.remove(n.laid);
                 outside.remove(n);
                 moving.remove(n);
@@ -2870,6 +3001,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
                 Scrolling.Config c = Scrolling.Config.read(in);
                 scroller(n, c.horizontal, c.zooms());
                 ((Scrolling.Scroller) n.scroller).configure(c);
+                if (n.view instanceof ScrollFrame) ((ScrollFrame) n.view).setEdges(c.edges, density);
                 n.insetTop = c.insetTop;
                 n.headerInset = c.horizontal ? 0 : c.headerInset;
                 break;
@@ -3403,10 +3535,21 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
                 l.opacity *= p;
             }
         }
+        boolean hadBackdrop = backdropNodes.contains(n);
+        boolean hasBackdrop = l.hasBackdrop();
         l.apply(n.view, n.background);
         if (n.shift != 0) {
             if (n.shiftAcross) n.view.setTranslationX(n.view.getTranslationX() + n.shift * density);
             else n.view.setTranslationY(n.view.getTranslationY() + n.shift * density);
+        }
+        if (hasBackdrop != hadBackdrop) {
+            if (hasBackdrop) backdropNodes.add(n);
+            else backdropNodes.remove(n);
+            updateBackdropAncestors();
+        }
+        if (!backdropAncestors.isEmpty()) {
+            ViewParent p = n.view.getParent();
+            if (p instanceof ViewGroup && backdropAncestors.contains(p)) ((ViewGroup) p).invalidate();
         }
     }
 
@@ -3721,6 +3864,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         }
         if (accessoryShown != null && accessoryShown != bar && accessoryShown.view.getParent() == this) {
             removeView(accessoryShown.view);
+            if (!backdropNodes.isEmpty()) updateBackdropAncestors();
         }
         accessoryShown = bar;
         keepFocusedClear();
@@ -3728,6 +3872,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         if (bar.view.getParent() != this) {
             detach(bar.view);
             addView(bar.view);
+            if (!backdropNodes.isEmpty()) updateBackdropAncestors();
         }
         placeAccessory();
     }
@@ -4620,7 +4765,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         View view = kind == Protocol.KIND_TEXT ? new TextNode(context)
                 : kind == Protocol.KIND_IMAGE ? new ImageNode(context)
                 : kind == Protocol.KIND_CANVAS ? new CanvasNode(context)
-                : kind == Protocol.KIND_SCROLL ? new FrameLayout(context)
+                : kind == Protocol.KIND_SCROLL ? new ScrollFrame(context)
                 : kind == Protocol.KIND_MODAL ? new Layer(context) : new Group(context);
         Node n = new Node(id, view);
         // Styles can arrive before Android lays the view out. Its pivot is relative to the actual size, so refresh it after a first layout or resize rather than retaining a pivot computed against zero bounds.
@@ -4815,6 +4960,8 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         scroller.addView(n.children);
         ((ViewGroup) n.view).addView(scroller, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         n.scroller = scroller;
+        if (n.view instanceof ScrollFrame) ((ScrollFrame) n.view).scroller = scroller;
+        if (!backdropNodes.isEmpty()) updateBackdropAncestors();
     }
 
     /**
@@ -4956,6 +5103,9 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
             look.dropShadow.blur = in.readFloat() * density;
             look.dropShadow.color = Text.argb(in.readInt());
         }
+        BlurGeometry.BackdropSpec backdrop = BlurGeometry.readBackdrop(in, density);
+        look.backdropColorMatrix = backdrop.colorMatrix;
+        look.backdropBlur = backdrop.blur;
     }
 
     /** Runs keyframes over n's look, or stops what ran when they change. */
@@ -5452,11 +5602,24 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         private View routed;
         /** Whether the touch reached the group outside its bounds and slop: only children may take it. */
         boolean childrenOnly;
+        final Object backdropState = Backdrop.createState();
+        private final Backdrop.Callbacks callbacks = new Backdrop.Callbacks() {
+            @Override public void superDraw(Canvas canvas) { Group.super.draw(canvas); }
+            @Override public boolean drawChild(Canvas canvas, View child, long drawingTime) {
+                return Group.this.drawChild(canvas, child, drawingTime);
+            }
+            @Override public void superOnDrawForeground(Canvas canvas) { Group.super.onDrawForeground(canvas); }
+        };
 
         Group(Context context) {
             super(context);
             setClipChildren(false);
             setClipToPadding(false);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Backdrop.drawContainer(this, canvas, backdropHost, callbacks, backdropState);
         }
 
         /** Whether the group itself may take the touch it is handed, as core.Reach says. */
@@ -5948,6 +6111,19 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
                 }
                 if (moved) applyAnimated();
                 if (n.sticky != null) pinSticky(n);
+                if (n.view instanceof ScrollFrame && ((ScrollFrame) n.view).scrollEdges.any()) {
+                    n.view.invalidate();
+                }
+                if (!backdropAncestors.isEmpty()) {
+                    if (n.view instanceof ViewGroup && backdropAncestors.contains(n.view)) {
+                        n.view.invalidate();
+                        if (n.children != null && backdropAncestors.contains(n.children)) {
+                            n.children.invalidate();
+                        }
+                    }
+                    ViewParent p = n.view.getParent();
+                    if (p instanceof ViewGroup && backdropAncestors.contains(p)) ((ViewGroup) p).invalidate();
+                }
                 scrollEvent(Protocol.EVENT_SCROLL, x, y, zoom);
             }
 
@@ -6015,14 +6191,66 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
     }
 
     /**
+     * A scroll view's outer container: clips its scroller and draws any soft
+     * or hard edge effects over the scrolling content, while still participating
+     * in backdrop-filter propagation for blurred views inside its content.
+     */
+    private final class ScrollFrame extends FrameLayout {
+        final ScrollEdges scrollEdges = new ScrollEdges();
+        final Object backdropState = Backdrop.createState();
+        View scroller;
+        private final Backdrop.Callbacks callbacks = new Backdrop.Callbacks() {
+            @Override public void superDraw(Canvas canvas) { ScrollFrame.super.draw(canvas); }
+            @Override public boolean drawChild(Canvas canvas, View child, long drawingTime) {
+                return ScrollFrame.this.drawChild(canvas, child, drawingTime);
+            }
+            @Override public void superOnDrawForeground(Canvas canvas) { ScrollFrame.super.onDrawForeground(canvas); }
+        };
+
+        ScrollFrame(Context context) {
+            super(context);
+        }
+
+        void setEdges(BlurGeometry.Edge[] edges, float density) {
+            if (scrollEdges.configure(edges, density)) {
+                if (scrollEdges.any()) setWillNotDraw(false);
+                invalidate();
+            }
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            if (scrollEdges.any()) {
+                scrollEdges.draw(this, canvas, scroller, backdropHost, backdropState, callbacks);
+                return;
+            }
+            Backdrop.drawContainer(this, canvas, backdropHost, callbacks, backdropState);
+        }
+    }
+
+    /**
      * A scroll view's content. Scroll views leave its length along their
      * axis unbounded, so it takes the size ItemScrollContent gave it.
      */
-    private static final class Content extends FrameLayout {
+    private final class Content extends FrameLayout {
+        final Object backdropState = Backdrop.createState();
+        private final Backdrop.Callbacks callbacks = new Backdrop.Callbacks() {
+            @Override public void superDraw(Canvas canvas) { Content.super.draw(canvas); }
+            @Override public boolean drawChild(Canvas canvas, View child, long drawingTime) {
+                return Content.this.drawChild(canvas, child, drawingTime);
+            }
+            @Override public void superOnDrawForeground(Canvas canvas) { Content.super.onDrawForeground(canvas); }
+        };
+
         Content(Context context) {
             super(context);
             setClipChildren(false);
             setClipToPadding(false);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Backdrop.drawContainer(this, canvas, backdropHost, callbacks, backdropState);
         }
 
         @Override
@@ -6034,11 +6262,25 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
     }
 
     /** A modal's layer: it takes the touches its children leave, so none reach the views it covers. */
-    private static final class Layer extends FrameLayout {
+    private final class Layer extends FrameLayout {
+        final Object backdropState = Backdrop.createState();
+        private final Backdrop.Callbacks callbacks = new Backdrop.Callbacks() {
+            @Override public void superDraw(Canvas canvas) { Layer.super.draw(canvas); }
+            @Override public boolean drawChild(Canvas canvas, View child, long drawingTime) {
+                return Layer.this.drawChild(canvas, child, drawingTime);
+            }
+            @Override public void superOnDrawForeground(Canvas canvas) { Layer.super.onDrawForeground(canvas); }
+        };
+
         Layer(Context context) {
             super(context);
             setClipChildren(false);
             setClipToPadding(false);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Backdrop.drawContainer(this, canvas, backdropHost, callbacks, backdropState);
         }
 
         @Override

@@ -325,6 +325,36 @@ func spoken(lang string) []string {
 	}
 }
 
+// writeBackdropFilters writes a view's backdrop filters as BlurGeometry.readBackdrop
+// reads them: whether a color matrix is present (and its 20 floats, rows with
+// offsets from 0 to 1), then the widest blur radius in points. Drop shadows
+// are omitted, as CSS's backdrop-filter draws none.
+func writeBackdropFilters(w *writer, filters []driver.Filter) {
+	m, color, blur, _ := driver.SplitFilters(filters)
+	w.flags(color)
+	if color {
+		w.floats(m[:]...)
+	}
+	w.points(blur)
+}
+
+// writeScrollEdges writes a scroll view's four edge effects (top, right, bottom,
+// left) as BlurGeometry.readEdges reads them: each side's drawn effect
+// (EdgeEffectSoft, EdgeEffectHard, or EdgeEffectHidden), followed for active
+// sides by its bar extent in points and its tint and hairline colors.
+func writeScrollEdges(w *writer, edges [4]driver.ScrollEdge) {
+	for i := range edges {
+		e := &edges[i]
+		drawn := e.Drawn()
+		w.byte(byte(drawn))
+		if drawn != driver.EdgeEffectHidden {
+			w.points(e.Extent)
+			w.u32(uint32(e.Tint))
+			w.u32(uint32(e.Line))
+		}
+	}
+}
+
 // writeDirection writes ItemDirection as NsgoView.apply reads it: the direction, then the spoken words in the language the app shows.
 func writeDirection(w *writer, it *driver.MountItem) {
 	w.flags(it.RTL)

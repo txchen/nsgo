@@ -42,7 +42,7 @@ A scroll view follows NSH's `scrolling-and-lists.md`: `ScrollBehavior` holds pag
 | Web | Bands that stick over the content (`position: sticky`, from the top left, as the content beside them is absolutely placed), stacking `backdrop-filter` blurs whose radii double toward the side, each fading in through `mask-image` |
 | Windows | Over the children, from one copy of the target: each level blurred by its whole blur through Direct2D's Gaussian blur and faded in by a gradient opacity brush |
 | Linux | The background alone, at 85% under soft bars, easing out as elsewhere, or at 95% under hard bars, as GTK draws nothing behind a widget |
-| Android | Nothing yet ([roadmap](../roadmap.md)) |
+| Android | From Android 12, `ScrollFrame` records its background and scroller into a hardware `RenderNode` (`ScrollEdges.java`): soft edges draw the progressive blur levels (`driver.SoftEdgeLevels`) via `RenderEffect.createBlurEffect` masked by linear gradient shaders (`BlendMode.DST_IN`) under the 80% smoothstep tint; hard edges draw an even blur clipped to the band under the 80% tint with the half-point hairline. Before Android 12 (or without hardware acceleration), falls back to the unblurred tint alone (85% soft smoothstep, 95% hard with hairline) |
 
 ### Bars of the app's
 

@@ -49,6 +49,9 @@ final class Look {
     float blur;
     /** The filters' drop shadow, in pixels, null for none: drawn from Android 12. */
     Shadow dropShadow;
+    /** A color matrix of the backdrop filters (4×5, offsets from 0 to 1), null for none, and their blur in pixels. */
+    float[] backdropColorMatrix;
+    float backdropBlur;
     /** The blend mode, as driver.BlendMode numbers them. */
     int blend;
 
@@ -101,8 +104,15 @@ final class Look {
         l.colorMatrix = colorMatrix;
         l.blur = blur;
         l.dropShadow = dropShadow;
+        l.backdropColorMatrix = backdropColorMatrix;
+        l.backdropBlur = backdropBlur;
         l.blend = blend;
         return l;
+    }
+
+    /** Whether the look carries any backdrop filter (blur or color matrix). */
+    boolean hasBackdrop() {
+        return backdropBlur > 0 || backdropColorMatrix != null;
     }
 
     /**

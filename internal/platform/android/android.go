@@ -1445,6 +1445,7 @@ func encode(w *writer, b *driver.MountBatch, first bool, requests []uint32, nati
 			w.float(c.ZoomScale)
 			w.points(b.RefreshIndicator)
 			w.points(c.HeaderInset)
+			writeScrollEdges(w, c.Edges)
 		case driver.ItemScrollContent:
 			w.points(it.Size.Width)
 			w.points(it.Size.Height)
@@ -1932,6 +1933,8 @@ func writeDecor(w *writer, v *driver.ViewStyle) {
 		w.u32(uint32(sh.Color))
 	}
 	writeKeyframes(w, v.Animation)
+	// Backdrop filters: color matrix and widest blur, drawn from Android 12.
+	writeBackdropFilters(w, e.BackdropFilters)
 }
 
 // writeStyle writes a text style in the format Text.Style reads.

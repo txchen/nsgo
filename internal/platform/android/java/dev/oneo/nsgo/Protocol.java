@@ -642,6 +642,12 @@ final class Protocol {
     static final int GRADIENT_RADIAL = 1;
     static final int GRADIENT_CONIC = 2;
 
+    // Scroll edge effects, as in driver/scroll.go.
+    static final int EDGE_EFFECT_AUTOMATIC = 0;
+    static final int EDGE_EFFECT_SOFT = 1;
+    static final int EDGE_EFFECT_HARD = 2;
+    static final int EDGE_EFFECT_HIDDEN = 3;
+
     // Vertical alignments of attachments, as in core/style.go; 0 and
     // Baseline are the baseline.
     static final int VALIGN_TEXT_TOP = 2;
@@ -671,5 +677,10 @@ final class Protocol {
     /** Whether bit i of a flags byte is set; Go writes the first flag lowest. */
     static boolean flag(int flags, int i) {
         return (flags & (1 << i)) != 0;
+    }
+
+    /** Converts NSGo's RGBA color (0xRRGGBBAA) to Android's ARGB (0xAARRGGBB). */
+    static int argb(int rgba) {
+        return (rgba >>> 8) | (rgba << 24);
     }
 }

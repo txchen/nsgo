@@ -53,6 +53,8 @@ final class Scrolling {
         float minZoom = 1, maxZoom = 1, zoom = 1;
         /** The height of the app's own refresh indicator; 0 shows the spinner. */
         float refreshIndicator;
+        /** The four scroll edge effects (top, right, bottom, left). */
+        BlurGeometry.Edge[] edges;
 
         boolean snaps() {
             return paging || interval > 0 || offsets.length > 0;
@@ -105,6 +107,7 @@ final class Scrolling {
             c.zoom = in.readFloat();
             c.refreshIndicator = in.readFloat();
             c.headerInset = in.readFloat();
+            c.edges = BlurGeometry.readEdges(in);
             return c;
         }
     }
@@ -160,6 +163,9 @@ final class Scrolling {
 
         /** How far the view is pulled past its top, its refresh room included, in points. */
         float pulled();
+
+        /** Sets the transient inherited backdrop source forwarded to the scroller's content during draw. */
+        void setInheritedBackdrop(Object source, Backdrop.Host host);
     }
 
     /**
@@ -550,10 +556,33 @@ final class Scrolling {
     /** A vertical scroll view. */
     static final class VScroll extends ScrollView implements Scroller {
         final Driver d;
+        private Object inheritedBackdrop;
+        private Backdrop.Host backdropHost;
 
         VScroll(Context context, Host host, float density, View content, ViewGroup frame) {
             super(context);
             d = new Driver(this, false, host, density, content, frame);
+        }
+
+        @Override
+        public void setInheritedBackdrop(Object source, Backdrop.Host host) {
+            inheritedBackdrop = source;
+            backdropHost = host;
+        }
+
+        @Override
+        protected void dispatchDraw(android.graphics.Canvas canvas) {
+            if (inheritedBackdrop != null && backdropHost != null && getChildCount() > 0) {
+                View child = getChildAt(0);
+                backdropHost.setInherited(child, Backdrop.forward(inheritedBackdrop, child));
+                try {
+                    super.dispatchDraw(canvas);
+                } finally {
+                    backdropHost.setInherited(child, null);
+                }
+                return;
+            }
+            super.dispatchDraw(canvas);
         }
 
         @Override
@@ -624,10 +653,33 @@ final class Scrolling {
     /** A horizontal scroll view. */
     static final class HScroll extends HorizontalScrollView implements Scroller {
         final Driver d;
+        private Object inheritedBackdrop;
+        private Backdrop.Host backdropHost;
 
         HScroll(Context context, Host host, float density, View content, ViewGroup frame) {
             super(context);
             d = new Driver(this, true, host, density, content, frame);
+        }
+
+        @Override
+        public void setInheritedBackdrop(Object source, Backdrop.Host host) {
+            inheritedBackdrop = source;
+            backdropHost = host;
+        }
+
+        @Override
+        protected void dispatchDraw(android.graphics.Canvas canvas) {
+            if (inheritedBackdrop != null && backdropHost != null && getChildCount() > 0) {
+                View child = getChildAt(0);
+                backdropHost.setInherited(child, Backdrop.forward(inheritedBackdrop, child));
+                try {
+                    super.dispatchDraw(canvas);
+                } finally {
+                    backdropHost.setInherited(child, null);
+                }
+                return;
+            }
+            super.dispatchDraw(canvas);
         }
 
         @Override
@@ -713,6 +765,8 @@ final class Scrolling {
         private float zoom = 1;
         private float lastX, lastY, downX, downY;
         private boolean dragging, pinching, momentum;
+        private Object inheritedBackdrop;
+        private Backdrop.Host backdropHost;
 
         ZoomScroll(Context context, Host host, float density, View content) {
             super(context);
@@ -1014,6 +1068,27 @@ final class Scrolling {
         @Override
         public float pulled() {
             return 0;
+        }
+
+        @Override
+        public void setInheritedBackdrop(Object source, Backdrop.Host host) {
+            inheritedBackdrop = source;
+            backdropHost = host;
+        }
+
+        @Override
+        protected void dispatchDraw(android.graphics.Canvas canvas) {
+            if (inheritedBackdrop != null && backdropHost != null && getChildCount() > 0) {
+                View child = getChildAt(0);
+                backdropHost.setInherited(child, Backdrop.forward(inheritedBackdrop, child));
+                try {
+                    super.dispatchDraw(canvas);
+                } finally {
+                    backdropHost.setInherited(child, null);
+                }
+                return;
+            }
+            super.dispatchDraw(canvas);
         }
     }
 }
