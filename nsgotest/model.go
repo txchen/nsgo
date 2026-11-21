@@ -48,7 +48,7 @@ type View struct {
 	Scroll    driver.ScrollConfig
 	ZoomScale float32
 	Image     driver.ImageConfig
-	Web       driver.WebConfig
+	Web       WebConfig
 	// WebCommands are what the app asked a web view to do, oldest first;
 	// answered counts those AnswerScript went past.
 	WebCommands                      []WebCommand
@@ -585,7 +585,7 @@ func (a *App) apply(b *driver.MountBatch) {
 				a.recordOffscreen(it.Image.Source.Offscreen, nil)
 			}
 		case driver.ItemWeb:
-			v.Web = *it.Web
+			v.Web = webConfig(*it.Web)
 		case driver.ItemWebCommand:
 			v.WebCommands = append(v.WebCommands, WebCommand{Command: webCommandKinds[it.WebCommand], Value: it.Value, Data: it.Data})
 		case driver.ItemVideo:
