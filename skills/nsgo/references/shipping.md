@@ -43,6 +43,8 @@ A flag replaces the value it names (`-target`, `-version`, `-output`, or the sig
 
 Set `game: true` for game classification and Game Mode metadata, and `gamepad: true` when the app supports a hardware gamepad. See [Games](https://nsgo.dev/docs/building.md#games).
 
+Set `launch_screen.background` to a quoted `"#RRGGBB"` color and/or `launch_screen.image` to a centered PNG path on iOS and Android 12 or later. Use `launch_screen.dark` to override either field for dark appearance ([Launch screen](https://nsgo.dev/docs/building.md#launch-screen)).
+
 ## Build
 
 ```sh

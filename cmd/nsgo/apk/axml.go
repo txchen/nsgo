@@ -34,6 +34,8 @@ type Manifest struct {
 	// Theme replaces the application's theme, a framework style; empty
 	// keeps the runtime's.
 	Theme string
+	// Launch styles the launcher activity's system splash screen on API 31 and later.
+	Launch *LaunchScreen
 	// Debuggable marks a test build, whose launch intent may name the test
 	// the runtime runs.
 	Debuggable bool
@@ -161,9 +163,14 @@ const (
 // styles are the framework styles a manifest may name. A reference needs
 // the framework's resource ID, which the SDK's aapt2 resolves; these stay
 // stable across Android versions.
+const (
+	deviceDarkTheme  = 0x01030129 // Theme.DeviceDefault.NoActionBar
+	deviceLightTheme = 0x0103012c // Theme.DeviceDefault.Light.NoActionBar
+)
+
 var styles = map[string]uint32{
-	"@android:style/Theme.DeviceDefault.NoActionBar":       0x01030129,
-	"@android:style/Theme.DeviceDefault.Light.NoActionBar": 0x0103012c,
+	"@android:style/Theme.DeviceDefault.NoActionBar":       deviceDarkTheme,
+	"@android:style/Theme.DeviceDefault.Light.NoActionBar": deviceLightTheme,
 }
 
 // configChanges are the ActivityInfo.CONFIG_* names a manifest lists.
@@ -280,6 +287,13 @@ func appManifest(template []byte, m Manifest) (*node, error) {
 	}
 	if m.Theme != "" {
 		setAttr(app, androidNS, "theme", m.Theme)
+	}
+	if m.Launch != nil {
+		activity := child(app, "activity")
+		if activity == nil {
+			return nil, errors.New("manifest: no launcher activity for launch screen")
+		}
+		setAttr(activity, androidNS, "theme", fmt.Sprintf("@0x%08x", launchStyleID(m)))
 	}
 	if m.Debuggable {
 		setAttr(app, androidNS, "debuggable", "true")
@@ -526,6 +540,9 @@ func parseAppCategory(s string) (uint32, error) {
 }
 
 func parseStyle(s string) (uint32, error) {
+	if strings.HasPrefix(s, "@0x") {
+		return parseResourceID(s)
+	}
 	id, ok := styles[s]
 	if !ok {
 		return 0, fmt.Errorf("unknown style %q", s)

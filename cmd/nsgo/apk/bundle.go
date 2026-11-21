@@ -21,7 +21,7 @@ const BundletoolVersion = "1.18.3"
 // WriteBundle writes a signed Android App Bundle to w: template's manifest
 // with m filled in, files as the base module's, by their paths in an APK,
 // and the resource table, which holds the launcher icon, app names and
-// network policy when m has them.
+// network policy and launch screen when m has them.
 func WriteBundle(w io.Writer, template []byte, m Manifest, files []File, key *Key) error {
 	root, err := appManifest(template, m)
 	if err != nil {
@@ -53,6 +53,10 @@ func WriteBundle(w io.Writer, template []byte, m Manifest, files []File, key *Ke
 			file.Name = "base/" + file.Name
 			all = append(all, file)
 		}
+	}
+	for _, file := range launchFiles(m) {
+		file.Name = "base/" + file.Name
+		all = append(all, file)
 	}
 	for _, resource := range m.xmlResources() {
 		data, err := protoElement(resource.node(), false, false)
@@ -294,6 +298,9 @@ func resourcesProto(m Manifest) []byte {
 	default:
 		types = append(types, protoTypeEntries(xmlType, "xml", xmlEntries))
 	}
+	if m.Launch != nil {
+		types = append(types, launchProtoTypes(m)...)
+	}
 	p := pbBytes(nil, 1, pbVarint(nil, 1, appPackageID))
 	p = pbString(p, 2, m.Package)
 	for _, t := range types {
@@ -325,12 +332,20 @@ func protoTypeEntries(id uint64, name string, entries []protoEntry) []byte {
 
 // protoType is a Type of one entry, key, with an item in each of its
 // configurations.
-func protoType(id uint64, name, key string, values [][2][]byte) []byte {
+func protoType(id uint64, name, key string, items [][2][]byte) []byte {
+	values := make([][2][]byte, len(items))
+	for i, item := range items {
+		values[i] = [2][]byte{item[0], pbBytes(nil, 4, item[1])}
+	}
+	return protoValueType(id, name, key, values)
+}
+
+func protoValueType(id uint64, name, key string, values [][2][]byte) []byte {
 	entry := pbBytes(nil, 1, nil) // entry 0
 	entry = pbString(entry, 2, key)
 	for _, v := range values {
 		cv := pbBytes(nil, 1, v[0])
-		cv = pbBytes(cv, 2, pbBytes(nil, 4, v[1]))
+		cv = pbBytes(cv, 2, v[1])
 		entry = pbBytes(entry, 6, cv)
 	}
 	t := pbBytes(nil, 1, pbVarint(nil, 1, id))

@@ -159,6 +159,10 @@ func buildAndroidPackage(ctx context.Context, p *project, dir, ext string,
 	if icon == nil && legacy != nil {
 		icon = scaledPNG(legacy, apk.IconSize)
 	}
+	launch, err := p.androidLaunchScreen()
+	if err != nil {
+		return "", err
+	}
 	path := filepath.Join(dir, p.Name+ext)
 	f, err := os.Create(path)
 	if err != nil {
@@ -180,6 +184,7 @@ func buildAndroidPackage(ctx context.Context, p *project, dir, ext string,
 		Icon:              icon,
 		Adaptive:          adaptive,
 		Theme:             androidThemes[p.Appearance],
+		Launch:            launch,
 		Debuggable:        p.testBinary,
 		CrashReportBuild:  crashReportBuild(p),
 		Permissions:       p.androidPermissions(),
