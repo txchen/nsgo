@@ -98,11 +98,12 @@ type testOpen struct {
 // window is one GTK window and the tree it shows. The engine's goroutine
 // reaches its main-thread half only through Mount and post.
 type window struct {
-	testID  uint32  // the opened test surface, 0 for a regular window
-	batch   uint64  // batches applied
-	win     uintptr // GtkWindow, 0 for an embedded surface
-	surface uintptr // the NsgoView holding the root view
-	saves   driver.SavePreflights
+	testID   uint32  // the opened test surface, 0 for a regular window
+	batch    uint64  // batches applied
+	win      uintptr // GtkWindow, 0 for an embedded surface
+	surface  uintptr // the NsgoView holding the root view
+	saves    driver.SavePreflights
+	devFrame devWindowFrame
 	// primary is the backend's own surface. Opened surfaces share the GTK main loop, but closing one must not end the app.
 	primary bool
 	// opener is the app's own window for a surface the app opened, which goes when that window stops (stop).
@@ -410,11 +411,15 @@ func start(app engine.App, opts Options) (*window, error) {
 	}
 	startUIFont()
 	w := newWindow(opts, false)
+	if !opts.Hidden {
+		w.devFrame.restore(&opts)
+	}
 	w.primary, w.app, w.opts = true, app, opts
 	w.createWindow(opts)
 	if !opts.Hidden {
 		w.applyLook(opts)
 	}
+	w.devFrame.start(w)
 	w.env = w.environment()
 
 	w.setAppearance(opts.Appearance)
@@ -679,6 +684,7 @@ func (w *window) run() {
 // stop ends the engine, destroys the native components still showing
 // and frees the loop after run returns.
 func (w *window) stop() {
+	w.devFrame.close()
 	if !w.closing {
 		w.engine.Close()
 	}
@@ -727,7 +733,7 @@ func (w *window) createWindow(opts Options) {
 	w.setupInputs()
 	gSignalConnect(w.win, "close-request", cbCloseRequest, w.handle)
 	gSignalConnect(w.win, "map", cbWindowMapped, w.handle)
-	for _, name := range []string{"maximized", "fullscreen", "default-width", "default-height"} {
+	for _, name := range []string{"maximized", "fullscreened", "default-width", "default-height"} {
 		gSignalConnect(w.win, "notify::"+name, cbWindowState, w.handle)
 	}
 }
