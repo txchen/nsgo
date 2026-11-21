@@ -268,8 +268,8 @@ type surface struct {
 	// full rate, which serves it without a hop to the main thread.
 	frameWanted atomic.Bool
 	fullRate    atomic.Bool
-	motions     map[*view]*motion
-	ghosts      []*ghost
+	motions     map[*view]*apple.LayoutMotion
+	ghosts      []*apple.LayoutGhost
 	components  driver.NativeComponents
 	unknown     map[string]bool
 	// accessories are the inputs each InputAccessoryView rides above.
@@ -500,7 +500,7 @@ func Run(root engine.App, opts Options) {
 // newSurface is the surface the scene shows root in; a test host's has no
 // root until the test opens one.
 func newSurface(root engine.App, opts Options) *surface {
-	s := &surface{app: root, id: opts.ID, epoch: time.Now(), motions: map[*view]*motion{}, tops: map[*view]*view{}, slides: map[*view]*slide{}, appearance: opts.Appearance,
+	s := &surface{app: root, id: opts.ID, epoch: time.Now(), motions: map[*view]*apple.LayoutMotion{}, tops: map[*view]*view{}, slides: map[*view]*slide{}, appearance: opts.Appearance,
 		components: opts.Components, unknown: map[string]bool{}, accessories: map[driver.NodeID]*view{}, ownTexts: map[driver.NodeID]*view{},
 		perfOn: opts.Perf}
 	if automationBuild {

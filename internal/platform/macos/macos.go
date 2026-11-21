@@ -336,8 +336,8 @@ type surface struct {
 	frameWanted atomic.Bool
 	fullRate    atomic.Bool
 	stepping    bool // while tick steps a frame, up to the frame it reports
-	motions     map[*view]*motion
-	ghosts      []*ghost
+	motions     map[*view]*apple.LayoutMotion
+	ghosts      []*apple.LayoutGhost
 	components  driver.NativeComponents
 	unknown     map[string]bool // component names warned about
 	dragTarget  *view           // the view files are dragged over
@@ -930,7 +930,7 @@ var defaultLanguage string
 // newSurface makes a surface's view at opts' size; embedded is set for a
 // host's view.
 func newSurface(opts Options, embedded bool) *surface {
-	s := &surface{epoch: time.Now(), motions: map[*view]*motion{}, movers: map[*view]struct{}{},
+	s := &surface{epoch: time.Now(), motions: map[*view]*apple.LayoutMotion{}, movers: map[*view]struct{}{},
 		inside:     map[*view]struct{}{},
 		components: opts.Components, embedded: embedded, appearance: opts.Appearance, opts: opts}
 	s.appName = opts.Title
