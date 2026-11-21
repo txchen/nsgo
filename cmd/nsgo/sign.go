@@ -169,7 +169,16 @@ func signMacApp(ctx context.Context, p *project, app string) error {
 		}
 	}
 	args := p.macSignArgs(app)
-	if ents := p.hardenedEntitlements(); p.notarizing() && len(ents) > 0 {
+	ents := map[string]any{}
+	if p.notarizing() {
+		for k, v := range p.hardenedEntitlements() {
+			ents[k] = v
+		}
+	}
+	for k, v := range p.cloudEntitlements("") {
+		ents[k] = v
+	}
+	if len(ents) > 0 {
 		path, err := writeEntitlements(ents)
 		if err != nil {
 			return err
@@ -244,6 +253,9 @@ func signForStore(ctx context.Context, p *project, app string) error {
 		return fmt.Errorf("the provisioning profile does not tie %s to its App Clip: add the clip's target to the App ID's App Clip capability", p.ID)
 	}
 	if err := p.claimSignInWithApple(entitlements, entitlements); err != nil {
+		return err
+	}
+	if err := p.claimCloudEntitlements(entitlements, entitlements, teamIDFromEntitlements(entitlements)); err != nil {
 		return err
 	}
 	identity := p.Sign.Identity

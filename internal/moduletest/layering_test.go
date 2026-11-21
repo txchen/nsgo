@@ -31,6 +31,10 @@ var layers = []struct {
 	// through the files and the library the tool's extension shares, and
 	// Android's runtime through the driver's Live Updates.
 	{"widget", []string{"core", "internal/driver"}},
+	// Cloud storage reaches Apple's Foundation/iCloud APIs through purego and
+	// objcblock, Android's Play Games runtime hook through internal/driver, and
+	// nsgotest's isolated in-memory store through core.Scope.CloudStore.
+	{"cloud", []string{"core", "internal/driver", "internal/platform/objcblock"}},
 	{"internal/woff", nil},
 	{"internal/mimeinfo", nil},
 	{"internal/cldr/", nil},
@@ -115,7 +119,7 @@ var layers = []struct {
 	{"tsx/", []string{"core", "base/", "mobile", "desktop", "internal/devtools", "tsx", "tsx/bundler", "tsx/internal/js", "tsx/pkg", "tsx/websrc"}},
 	// Apps use the public packages only, and the hosts that embed an
 	// example app its package.
-	{"examples/", []string{"", "audio", "core", "base/", "ui/", "gpu", "mobile", "desktop", "desktop/locales", "gamepad", "i18n", "icons/", "nsgotest", "tsx/", "updater", "widget", "examples/"}},
+	{"examples/", []string{"", "audio", "cloud", "core", "base/", "ui/", "gpu", "mobile", "desktop", "desktop/locales", "gamepad", "i18n", "icons/", "nsgotest", "tsx/", "updater", "widget", "examples/"}},
 	// The nsgo tool links no component or runtime, so changing them does
 	// not build it again; it writes TSX declarations by running the app.
 	{"cmd/", []string{"core", "cmd/", "internal/automation", "internal/mimeinfo", "internal/platform/android/runtime", "tsx/bundler", "tsx/pkg", "tsx/websrc"}},

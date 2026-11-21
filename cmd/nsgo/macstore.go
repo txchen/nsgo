@@ -30,6 +30,7 @@ func (p *project) sandboxEntitlements() map[string]any {
 	if p.appleInfoDescribes("NSBluetoothAlwaysUsageDescription") {
 		ents["com.apple.security.device.bluetooth"] = true
 	}
+	maps.Copy(ents, p.cloudEntitlements(""))
 	maps.Copy(ents, p.MacOS.Entitlements)
 	return ents
 }
@@ -77,6 +78,9 @@ func buildMacStorePackage(ctx context.Context, p *project, app, dir, arch string
 		ents["com.apple.application-identifier"] = signedAppID(appID, p.ID)
 		ents["com.apple.developer.team-identifier"] = team
 		if err := p.claimSignInWithApple(ents, granted); err != nil {
+			return "", err
+		}
+		if err := p.claimCloudEntitlements(ents, granted, team); err != nil {
 			return "", err
 		}
 		if err := os.WriteFile(filepath.Join(app, "Contents", "embedded.provisionprofile"), data, 0o644); err != nil {

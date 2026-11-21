@@ -1201,6 +1201,7 @@ func (s *surface) environment() driver.Environment {
 		SignInWithApple:  apple.AppleSignInAvailable(),
 		Purchases:        apple.PurchasesAvailable(),
 		CanRequestReview: apple.ReviewAvailable(),
+		CloudStorage:     apple.CloudStorageAvailable(),
 		RTL:              rtl,
 		PixelRatio:       s.backingScale(),
 		Locale:           locale,

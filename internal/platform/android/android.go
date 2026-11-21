@@ -91,6 +91,8 @@ const (
 	msgTextRequest   = 26
 	// msgGamepadRumble starts or stops rumble on a connected game controller (gamepad.go, Gamepads.java).
 	msgGamepadRumble = 27
+	// msgCloudStorage sends a JSON cloud storage command to the Android runtime (driver.SendCloudStorage).
+	msgCloudStorage = 30
 
 	// Java to Go.
 	msgStart       = 1 // the view's size and the folds measured at it (readSize), as msgResize
@@ -122,13 +124,14 @@ const (
 	msgCanvasRequest = 22
 	// msgScanReport is what the code scanner reports: a frame of the camera, its close or its failure (scan.go).
 	msgScanReport = 23
-
 	// msgGamepad reports a game controller connecting, disconnecting or changing buttons and axes (gamepad.go).
 	msgGamepad = 24
 	// msgDiskSpaceReply answers msgDiskSpace, with byte counts or the reason it failed.
 	msgDiskSpaceReply = 25
 	msgTextReply      = 27
 	msgPerfFrame      = 28 // a monitored Choreographer frame and UI work since the previous frame
+	// msgCloudStorageReport is what the Android runtime's Play Games Snapshots hook reports, JSON (driver.ReportCloudStorage).
+	msgCloudStorageReport = 32
 )
 
 // The parts of an image view's request msgImage carries.
@@ -265,6 +268,9 @@ func connect(opts Options) *surface {
 			w.float(highFreq)
 			w.u32(uint32(ms))
 		})
+	})
+	driver.ConnectCloudStorage(func(msg []byte) {
+		s.send(msgCloudStorage, func(w *writer) { w.buf = append(w.buf, msg...) })
 	})
 	return s
 }
@@ -432,6 +438,19 @@ func (s *surface) serve(app engine.App, opts Options, test *testOpen) {
 			s.scanReport(&r)
 		case msgGamepad:
 			readGamepad(&r)
+		case msgCloudStorageReport:
+			report := slices.Clone(payload)
+			var state struct {
+				Type      string `json:"type"`
+				Available bool   `json:"available"`
+			}
+			if json.Unmarshal(report, &state) == nil && state.Type == "state" && s.env.CloudStorage != state.Available {
+				s.env.CloudStorage = state.Available
+				if s.engine != nil {
+					s.engine.SetEnvironment(s.env)
+				}
+			}
+			driver.ReportCloudStorage(report)
 		case msgDNS:
 			servers := make([]string, r.u32())
 			for i := range servers {

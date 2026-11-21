@@ -29,7 +29,7 @@ final class Protocol {
     static Message readMessage(DataInputStream in) throws IOException {
         int kind = in.read();
         if (kind == -1) return null;
-        if (kind < BATCH || kind > GAMEPAD_RUMBLE) throw invalidMessage("unexpected message kind " + kind);
+        if (kind < BATCH || kind > CLOUD_STORAGE) throw invalidMessage("unexpected message kind " + kind);
         int length;
         try {
             length = in.readInt();
@@ -92,6 +92,8 @@ final class Protocol {
     /** Starts or stops rumble on a game controller: device id, lowFreq, highFreq, durationMs (gamepad.go, Gamepads). */
     static final int GAMEPAD_RUMBLE = 27;
 
+    /** Carries out a cloud storage command for package cloud: JSON (CloudStorage). */
+    static final int CLOUD_STORAGE = 30;
 
     // Java to Go.
     static final int START = 1;
@@ -139,6 +141,8 @@ final class Protocol {
     static final int TEXT_REPLY = 27;
     /** Frame timestamp, display period, app UI work in nanoseconds, and whether the app changed. */
     static final int PERF_FRAME = 28;
+    /** What CloudStorage reports for package cloud: JSON (CloudStorage). */
+    static final int CLOUD_STORAGE_REPORT = 32;
 
     // TEXT_REQUEST carries a request ID and one of these operations.
     static final int TEXT_PREPARE = 1;

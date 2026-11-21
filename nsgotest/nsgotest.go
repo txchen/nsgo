@@ -469,6 +469,9 @@ type App struct {
 	// Secrets is the app's secure store, in memory: what Scope.Secrets keeps, by item, for a test to read or change, so no test touches the machine's keychain, also on a target. seedSecrets are what the Secrets option starts it with.
 	Secrets     *core.MemorySecrets
 	seedSecrets map[string]string
+	// cloud is the app's isolated in-memory cloud store for package cloud; cloudInit is what CloudAvailable sets before Start.
+	cloud     *memoryCloudStore
+	cloudInit *bool
 	// responseTree is the surface whose batch is being applied, which the platform's answers to what it asked go back to; guideTree the one that asked for the permission guide shown.
 	responseTree *core.Tree
 	guideTree    *core.Tree
@@ -648,6 +651,18 @@ func start(t testing.TB, view func(cx *core.Scope) core.Node, fn func(app *core.
 		env.Idiom = *a.idiom
 		a.env = &env
 	}
+	a.cloud = newMemoryCloudStore(a.Clock.WallTime)
+	if a.cloudInit != nil {
+		env := driver.Environment{}
+		if a.env != nil {
+			env = *a.env
+		}
+		env.CloudStorage = *a.cloudInit
+		a.env = &env
+		a.cloud.setAvailable(*a.cloudInit)
+	} else if a.env != nil {
+		a.cloud.setAvailable(a.env.CloudStorage)
+	}
 	// Where nsgo.Run opens windows the app does here: on macOS, and on Windows and Linux for an app's function. Its main view shows in the main window, where CurrentWindow, MainWindow and OnClosing work and CloseWindow closes it.
 	var desktop bool
 	if a.env != nil {
@@ -698,6 +713,7 @@ func start(t testing.TB, view func(cx *core.Scope) core.Node, fn func(app *core.
 		Storage: a.store,
 		DataDir: data, CacheDir: cache, LogsDir: logs,
 		Secrets: a.Secrets,
+		Cloud:   a.cloud,
 		Host:    a.host,
 		HotKeys: true,
 		Windows: windows,
@@ -1126,6 +1142,9 @@ func (a *App) SetEnvironment(env driver.Environment) {
 		a.target.setEnvironment(env)
 		return
 	}
+	if a.cloud != nil {
+		a.cloud.setAvailable(env.CloudStorage)
+	}
 	if a.appTree != nil {
 		// Every window shares the app's environment, and those it opens later start from it.
 		a.own = nil
@@ -1136,6 +1155,8 @@ func (a *App) SetEnvironment(env driver.Environment) {
 			}
 		}
 	} else {
+		envCopy := env
+		a.env = &envCopy
 		a.tree.SetEnvironment(env)
 	}
 	a.Settle()

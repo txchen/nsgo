@@ -831,6 +831,7 @@ func (s *surface) environment() driver.Environment {
 		SignInWithApple:  apple.AppleSignInAvailable(),
 		Purchases:        apple.PurchasesAvailable(),
 		CanRequestReview: !onTV() && apple.ReviewAvailable(),
+		CloudStorage:     apple.CloudStorageAvailable(),
 		VerticalBarEdge:  verticalBarEdge(traits),
 		Lifecycle:        appLifecycle(),
 		ThermalState:     thermal,

@@ -41,6 +41,7 @@ type Env struct {
 	appleSignIn             *Signal[bool]
 	purchases               *Signal[bool]
 	canRequestReview        *Signal[bool]
+	cloudStorage            *Signal[bool]
 	scheduled               *Signal[bool]
 	transparent, taskbar    *Signal[bool]
 	fontScale, ratio        *Signal[float32]
@@ -130,6 +131,7 @@ func newEnv(cx *Scope, app *Env) *Env {
 		appleSignIn:      NewSignal(cx, false),
 		purchases:        NewSignal(cx, false),
 		canRequestReview: NewSignal(cx, false),
+		cloudStorage:     NewSignal(cx, false),
 		scheduled:        NewSignal(cx, false),
 		transparent:      NewSignal(cx, false),
 		taskbar:          NewSignal(cx, false),
@@ -261,6 +263,7 @@ func (e *Env) set(v Environment) {
 	e.appleSignIn.Set(v.SignInWithApple)
 	e.purchases.Set(v.Purchases)
 	e.canRequestReview.Set(v.CanRequestReview)
+	e.cloudStorage.Set(v.CloudStorage)
 	e.scheduled.Set(v.ScheduledNotifications)
 	e.transparent.Set(v.CanMakeWindowsTransparent)
 	e.taskbar.Set(v.CanSkipTaskbar)
@@ -454,6 +457,9 @@ func (e *Env) CanPurchase() bool { return e.purchases.Get() }
 
 // CanRequestReview reports whether Scope.RequestReview can ask the platform's store for an in-app rating prompt here.
 func (e *Env) CanRequestReview() bool { return e.canRequestReview.Get() }
+
+// CanUseCloudStorage reports whether package cloud has an available cloud storage backend here: an Apple device signed into iCloud, Android with Google Play Games saved games, or a test app whose in-memory cloud store is enabled.
+func (e *Env) CanUseCloudStorage() bool { return e.cloudStorage.Get() }
 
 // CanScheduleNotifications reports whether a Notification with a later At or a Repeat is scheduled here, for the system to show with the app's process ended: on macOS and iOS in an app bundle, Android, and Windows for one without a Repeat. Elsewhere ShowNotification answers false for one without asking the platform.
 func (e *Env) CanScheduleNotifications() bool { return e.scheduled.Get() }

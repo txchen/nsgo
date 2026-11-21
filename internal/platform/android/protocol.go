@@ -469,6 +469,8 @@ func readEnvironment(r *reader) driver.Environment {
 	if more&8 != 0 {
 		env.Network = &driver.Network{Online: more&16 != 0, Expensive: more&32 != 0}
 	}
+	// Google Play Games Services Snapshots client is present and signed in.
+	env.CloudStorage = more&128 != 0
 	env.Idiom = driver.Idiom(r.byte())
 	env.Locale = r.str()
 	env.DeviceName = r.str()

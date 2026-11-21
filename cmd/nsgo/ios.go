@@ -584,7 +584,7 @@ func iosProjectData(p *project, sys *appleOS, team string) map[string]string {
 	return data
 }
 
-// xcodeEntitlements are what an app signed by Xcode claims, which its automatic signing registers: the app group it shares with widgets and Sign in with Apple when apple.sign_in_with_apple asks for it.
+// xcodeEntitlements are what an app signed by Xcode claims, which its automatic signing registers: the app group it shares with widgets, Sign in with Apple when apple.sign_in_with_apple asks for it, and iCloud when cloud/icloud asks for it.
 func (p *project) xcodeEntitlements(widgets bool) map[string]any {
 	ents := map[string]any{}
 	if widgets {
@@ -592,6 +592,9 @@ func (p *project) xcodeEntitlements(widgets bool) map[string]any {
 	}
 	if p.Apple.SignInWithApple {
 		ents[signInWithAppleEntitlement] = signInWithApple()
+	}
+	for k, v := range p.cloudEntitlements("") {
+		ents[k] = v
 	}
 	return ents
 }

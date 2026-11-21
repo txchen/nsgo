@@ -63,3 +63,26 @@ func TestEnvironmentReportsThatAffectResolutionStayFull(t *testing.T) {
 		t.Fatal("window frame requested a full resolve")
 	}
 }
+
+func TestEnvCanUseCloudStorage(t *testing.T) {
+	h := newHost(t, Size{Width: 200, Height: 100}, func(cx *Scope) Node {
+		return Text{
+			TestID: "cloud",
+			ContentFunc: func() string {
+				if cx.Env().CanUseCloudStorage() {
+					return "yes"
+				}
+				return "no"
+			},
+		}
+	})
+	h.commit()
+	if got := h.find("cloud").text.content; got != "no" {
+		t.Fatalf("initial CanUseCloudStorage = %q, want no", got)
+	}
+	h.tree.SetEnvironment(Environment{CloudStorage: true})
+	h.commit()
+	if got := h.find("cloud").text.content; got != "yes" {
+		t.Fatalf("updated CanUseCloudStorage = %q, want yes", got)
+	}
+}
