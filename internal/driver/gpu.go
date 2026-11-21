@@ -52,6 +52,46 @@ const (
 	GPUDim2DArray
 )
 
+// Canonical cubemap face layer indices (ArrayLayer 0..5), matching WebGPU,
+// Metal, Direct3D, and OpenGL.
+const (
+	GPUCubeFacePosX uint32 = 0
+	GPUCubeFaceNegX uint32 = 1
+	GPUCubeFacePosY uint32 = 2
+	GPUCubeFaceNegY uint32 = 3
+	GPUCubeFacePosZ uint32 = 4
+	GPUCubeFaceNegZ uint32 = 5
+)
+
+// GPUMipLevels returns the number of mipmap levels in a full chain from
+// width x height down to 1x1.
+func GPUMipLevels(width, height uint32) uint32 {
+	m := max(width, height)
+	if m == 0 {
+		return 0
+	}
+	var levels uint32 = 1
+	for m > 1 {
+		m >>= 1
+		levels++
+	}
+	return levels
+}
+
+// GPUMipSize returns the dimensions of mipLevel for a base texture of width x height
+// (clamped to a minimum of 1x1).
+func GPUMipSize(width, height, mipLevel uint32) (uint32, uint32) {
+	w := width >> mipLevel
+	h := height >> mipLevel
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+	return w, h
+}
+
 // GPUTextureUsage is a bitmask of permitted uses for a GPU texture.
 type GPUTextureUsage uint32
 
@@ -297,6 +337,7 @@ type GPUViewConfig struct {
 // GPULimits reports device capability limits.
 type GPULimits struct {
 	MaxTextureDimension2D     uint32
+	MaxTextureArrayLayers     uint32
 	MaxBufferSize             uint64
 	MaxUniformBufferSize      uint64
 	MaxBindGroups             uint32
@@ -309,6 +350,7 @@ type GPULimits struct {
 func DefaultGPULimits() GPULimits {
 	return GPULimits{
 		MaxTextureDimension2D:     4096,
+		MaxTextureArrayLayers:     256,
 		MaxBufferSize:             256 << 20,
 		MaxUniformBufferSize:      64 << 10,
 		MaxBindGroups:             4,
@@ -356,6 +398,8 @@ type GPUSamplerDesc struct {
 	AddressU      GPUAddressMode
 	AddressV      GPUAddressMode
 	AddressW      GPUAddressMode
+	MinLOD        float32
+	MaxLOD        float32
 	Compare       GPUCompareFunc
 	MaxAnisotropy uint16
 }
@@ -504,6 +548,7 @@ const (
 	GPUOpCreatePipeline
 	GPUOpDestroyPipeline
 	GPUOpReadTexture
+	GPUOpGenerateMipmaps
 )
 
 // GPUResourceOp is one resource creation, update, destruction, or readback op.
@@ -519,6 +564,8 @@ type GPUResourceOp struct {
 	BindGroup       *GPUBindGroupDesc
 	Pipeline        *GPUPipelineDesc
 	TextureDst      GPUTextureCopy
+	WriteWidth      uint32
+	WriteHeight     uint32
 	DataLayout      GPUDataLayout
 	ReadbackID      uint64
 	ReadbackRegion  GPUTextureRegion

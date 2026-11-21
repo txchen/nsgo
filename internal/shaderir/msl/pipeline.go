@@ -415,20 +415,45 @@ func (w *pipeWriter) emitExpr(e shaderir.Expr, stage string) string {
 			all := append(bArgs, args...)
 			return fmt.Sprintf("F%d(%s)", callee.Index, strings.Join(all, ", "))
 		}
+		var texKind shaderir.BasicType
+		if len(e.Exprs) > 1 {
+			texKind = w.texType(e.Exprs[1])
+		}
 		switch callee.BuiltinFunc {
 		case shaderir.TextureSample:
+			if texKind == shaderir.Texture2DArray && len(args) >= 4 {
+				return fmt.Sprintf("%s.sample(%s, %s, uint(%s))", args[0], args[1], args[2], args[3])
+			}
 			return fmt.Sprintf("%s.sample(%s, %s)", args[0], args[1], strings.Join(args[2:], ", "))
 		case shaderir.TextureSampleLevel:
+			if texKind == shaderir.Texture2DArray && len(args) >= 5 {
+				return fmt.Sprintf("%s.sample(%s, %s, uint(%s), level(%s))", args[0], args[1], args[2], args[3], args[4])
+			}
 			return fmt.Sprintf("%s.sample(%s, %s, level(%s))", args[0], args[1], args[2], args[3])
 		case shaderir.TextureSampleBias:
+			if texKind == shaderir.Texture2DArray && len(args) >= 5 {
+				return fmt.Sprintf("%s.sample(%s, %s, uint(%s), bias(%s))", args[0], args[1], args[2], args[3], args[4])
+			}
 			return fmt.Sprintf("%s.sample(%s, %s, bias(%s))", args[0], args[1], args[2], args[3])
 		case shaderir.TextureSampleGrad:
+			if texKind == shaderir.Texture2DArray && len(args) >= 6 {
+				return fmt.Sprintf("%s.sample(%s, %s, uint(%s), gradient2d(%s, %s))", args[0], args[1], args[2], args[3], args[4], args[5])
+			}
+			if texKind == shaderir.TextureCube && len(args) >= 5 {
+				return fmt.Sprintf("%s.sample(%s, %s, gradientcube(%s, %s))", args[0], args[1], args[2], args[3], args[4])
+			}
 			return fmt.Sprintf("%s.sample(%s, %s, gradient2d(%s, %s))", args[0], args[1], args[2], args[3], args[4])
 		case shaderir.TextureSampleCompare:
 			return fmt.Sprintf("%s.sample_compare(%s, %s, %s)", args[0], args[1], args[2], args[3])
 		case shaderir.TextureLoad:
-			return fmt.Sprintf("%s.read(uint2(%s), %s)", args[0], args[1], args[2])
+			if texKind == shaderir.Texture2DArray && len(args) >= 4 {
+				return fmt.Sprintf("%s.read(uint2(%s), uint(%s), uint(%s))", args[0], args[1], args[2], args[3])
+			}
+			return fmt.Sprintf("%s.read(uint2(%s), uint(%s))", args[0], args[1], args[2])
 		case shaderir.TextureDimensions:
+			if len(args) >= 2 {
+				return fmt.Sprintf("uint2(%s.get_width(uint(%s)), %s.get_height(uint(%s)))", args[0], args[1], args[0], args[1])
+			}
 			return fmt.Sprintf("uint2(%s.get_width(), %s.get_height())", args[0], args[0])
 		case shaderir.Atan2:
 			return fmt.Sprintf("atan2(%s)", strings.Join(args, ", "))
@@ -437,6 +462,13 @@ func (w *pipeWriter) emitExpr(e shaderir.Expr, stage string) string {
 		}
 	}
 	return "0"
+}
+
+func (w *pipeWriter) texType(e shaderir.Expr) shaderir.BasicType {
+	if e.Type == shaderir.BindingVariable && e.Index >= 0 && e.Index < len(w.p.Bindings) {
+		return w.p.Bindings[e.Index].Type.Main
+	}
+	return shaderir.Texture2D
 }
 
 func constLit(c constant.Value, unsigned bool) string {

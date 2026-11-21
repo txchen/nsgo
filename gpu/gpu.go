@@ -46,6 +46,89 @@ const (
 	Dim2DArray TextureDimension = TextureDimension(driver.GPUDim2DArray)
 )
 
+// CubeFace identifies one face (ArrayLayer 0..5) of a DimCube Texture in
+// canonical WebGPU / Metal / Direct3D / OpenGL order.
+type CubeFace = uint32
+
+const (
+	CubeFacePosX CubeFace = driver.GPUCubeFacePosX
+	CubeFaceNegX CubeFace = driver.GPUCubeFaceNegX
+	CubeFacePosY CubeFace = driver.GPUCubeFacePosY
+	CubeFaceNegY CubeFace = driver.GPUCubeFaceNegY
+	CubeFacePosZ CubeFace = driver.GPUCubeFacePosZ
+	CubeFaceNegZ CubeFace = driver.GPUCubeFaceNegZ
+)
+
+// MaxMipLevels returns the number of mipmap levels in a full chain from
+// width x height down to 1x1.
+func MaxMipLevels(width, height uint32) uint32 {
+	return driver.GPUMipLevels(width, height)
+}
+
+// MipSize returns the width and height of mipLevel for a base texture of
+// width x height (clamped to a minimum of 1x1).
+func MipSize(width, height, mipLevel uint32) (uint32, uint32) {
+	return driver.GPUMipSize(width, height, mipLevel)
+}
+
+// DownsampleRGBA2x produces the next mipmap level from src using a 2x2 box filter.
+func DownsampleRGBA2x(src *image.RGBA) *image.RGBA {
+	if src == nil {
+		return nil
+	}
+	b := src.Bounds()
+	sw, sh := b.Dx(), b.Dy()
+	if sw <= 0 || sh <= 0 {
+		return nil
+	}
+	dw := max(sw/2, 1)
+	dh := max(sh/2, 1)
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	for dy := 0; dy < dh; dy++ {
+		sy0 := min(dy*2, sh-1)
+		sy1 := min(sy0+1, sh-1)
+		for dx := 0; dx < dw; dx++ {
+			sx0 := min(dx*2, sw-1)
+			sx1 := min(sx0+1, sw-1)
+			i00 := src.PixOffset(b.Min.X+sx0, b.Min.Y+sy0)
+			i10 := src.PixOffset(b.Min.X+sx1, b.Min.Y+sy0)
+			i01 := src.PixOffset(b.Min.X+sx0, b.Min.Y+sy1)
+			i11 := src.PixOffset(b.Min.X+sx1, b.Min.Y+sy1)
+			di := dst.PixOffset(dx, dy)
+			for ch := 0; ch < 4; ch++ {
+				sum := int(src.Pix[i00+ch]) + int(src.Pix[i10+ch]) + int(src.Pix[i01+ch]) + int(src.Pix[i11+ch])
+				dst.Pix[di+ch] = byte((sum + 2) / 4)
+			}
+		}
+	}
+	return dst
+}
+
+// GenerateMipChainRGBA generates up to maxLevels mipmap images starting from
+// base (level 0) using a 2x2 box filter. When maxLevels is 0, the full chain
+// down to 1x1 is returned.
+func GenerateMipChainRGBA(base *image.RGBA, maxLevels uint32) []*image.RGBA {
+	if base == nil {
+		return nil
+	}
+	b := base.Bounds()
+	if b.Dx() <= 0 || b.Dy() <= 0 {
+		return nil
+	}
+	full := MaxMipLevels(uint32(b.Dx()), uint32(b.Dy()))
+	if maxLevels == 0 || maxLevels > full {
+		maxLevels = full
+	}
+	chain := make([]*image.RGBA, 0, maxLevels)
+	cur := base
+	chain = append(chain, cur)
+	for lvl := uint32(1); lvl < maxLevels; lvl++ {
+		cur = DownsampleRGBA2x(cur)
+		chain = append(chain, cur)
+	}
+	return chain
+}
+
 // TextureFormat identifies the pixel or depth/stencil layout of a Texture.
 type TextureFormat uint8
 
@@ -140,6 +223,8 @@ type SamplerDesc struct {
 	AddressU      AddressMode
 	AddressV      AddressMode
 	AddressW      AddressMode
+	MinLOD        float32
+	MaxLOD        float32 // 0 defaults to 32.0 (unbounded)
 	Compare       CompareFunc
 	MaxAnisotropy uint16
 }
@@ -423,6 +508,18 @@ type TextureCopy struct {
 	OriginY    uint32
 }
 
+// TextureWrite identifies a texture subresource (mip level, array layer or
+// cubemap face, and optional sub-rectangle) for Device.WriteTextureRegion.
+type TextureWrite struct {
+	Texture    *Texture
+	MipLevel   uint32
+	ArrayLayer uint32
+	OriginX    uint32
+	OriginY    uint32
+	Width      uint32 // 0 defaults to mipWidth - OriginX
+	Height     uint32 // 0 defaults to mipHeight - OriginY
+}
+
 // DataLayout describes linear pixel data layout in a Go byte slice or Buffer.
 type DataLayout struct {
 	Offset       uint64
@@ -442,6 +539,7 @@ type TextureRegion struct {
 // Limits reports the active GPU device's capability limits.
 type Limits struct {
 	MaxTextureDimension2D     uint32
+	MaxTextureArrayLayers     uint32
 	MaxBufferSize             uint64
 	MaxUniformBufferSize      uint64
 	MaxBindGroups             uint32
@@ -454,8 +552,12 @@ func limitsFromDriver(l driver.GPULimits) Limits {
 	if l.MaxTextureDimension2D == 0 {
 		l = driver.DefaultGPULimits()
 	}
+	if l.MaxTextureArrayLayers == 0 {
+		l.MaxTextureArrayLayers = driver.DefaultGPULimits().MaxTextureArrayLayers
+	}
 	return Limits{
 		MaxTextureDimension2D:     l.MaxTextureDimension2D,
+		MaxTextureArrayLayers:     l.MaxTextureArrayLayers,
 		MaxBufferSize:             l.MaxBufferSize,
 		MaxUniformBufferSize:      l.MaxUniformBufferSize,
 		MaxBindGroups:             l.MaxBindGroups,
