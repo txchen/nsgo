@@ -40,7 +40,7 @@ func (cx *Scope) NewAudioOutput(conf AudioOutputConfig) (*AudioOutput, error) {
 		return nil, err
 	}
 	t := cx.tree()
-	if t == nil || !Untracked(cx, cx.Env().CanPlayAudio) {
+	if t == nil {
 		return nil, ErrAudioOutputUnsupported
 	}
 	factory, ok := t.text.(driver.AudioOutputFactory)

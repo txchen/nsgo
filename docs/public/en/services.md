@@ -101,7 +101,7 @@ In headless tests, `App.PickFiles`, `App.PickDirectories` and `App.SaveFile` rec
 
 ## Pull PCM audio
 
-Use `audio.NewOutput(cx, audio.OutputConfig{SampleRate: 48000, Channels: 2, Render: render})` to play interleaved Float32 PCM your app decodes or synthesizes. `Start` begins pulling samples, `Pause` stops the pulls and the owning scope closes the output as it goes. macOS and iOS support this stream. Other targets return `audio.ErrUnsupported`.
+Use `audio.NewOutput(cx, audio.OutputConfig{SampleRate: 48000, Channels: 2, Render: render})` to play interleaved Float32 PCM your app decodes or synthesizes. `Start` begins pulling samples, `Pause` stops the pulls and the owning scope closes the output as it goes. macOS, iOS and Linux support this stream. Other targets return `audio.ErrUnsupported`.
 
 `Render` returns the number of frames it filled. It runs on the audio thread and must avoid blocking, allocation and graph access. A short fill plays silence for the remainder and increments `Underruns`. `Position` returns the monotonic frame count and the host time at that frame. Use `Flush` to discard pending frames and `Latency` to read the buffer latency. Route changes and interruptions pause output and call `OnInterrupt` on the engine. The app can resume it with `Start`.
 

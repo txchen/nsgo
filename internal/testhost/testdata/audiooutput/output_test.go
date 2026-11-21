@@ -16,7 +16,7 @@ import (
 func TestMain(m *testing.M) { nsgotest.Main(m) }
 
 func TestAudioOutputUnsupported(t *testing.T) {
-	if target := nsgotest.Target(); target == "macos" || target == "ios" || target == "ios_simulator" {
+	if target := nsgotest.Target(); target == "macos" || target == "ios" || target == "ios_simulator" || target == "linux" {
 		t.Skip("this target supports pull PCM output")
 	}
 	var err error
@@ -33,9 +33,9 @@ func TestAudioOutputUnsupported(t *testing.T) {
 
 func TestAudioOutputNative(t *testing.T) {
 	switch nsgotest.Target() {
-	case "macos", "ios", "ios_simulator":
+	case "macos", "ios", "ios_simulator", "linux":
 	default:
-		t.Skip("run on macOS or iOS")
+		t.Skip("run on macOS, iOS or Linux")
 	}
 	const rate, channels = 48000, 2
 	var calls atomic.Int64

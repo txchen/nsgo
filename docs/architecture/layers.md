@@ -65,6 +65,7 @@ nsgo
 │   │   ├── field, hover, finger         Shared input
 │   │   ├── scrollbar, textselect        Shared scrolling and selection
 │   │   ├── speechd                      speech-dispatcher's protocol, Linux's speaking
+│   │   ├── pcmoutput                    Shared pull-based PCM output loop and timing
 │   │   ├── imagedecode, imageload       Shared images
 │   │   ├── menutext                     Shared menu labels
 │   │   ├── loopback                     Shared loopback redirects of desktops' sign-ins

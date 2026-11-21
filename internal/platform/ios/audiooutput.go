@@ -8,5 +8,8 @@ import (
 )
 
 func (*surface) OpenAudioOutput(c driver.AudioOutputConfig) (driver.AudioOutput, error) {
+	if onTV() {
+		return nil, driver.ErrAudioOutputUnsupported
+	}
 	return apple.OpenAudioOutput(c)
 }
