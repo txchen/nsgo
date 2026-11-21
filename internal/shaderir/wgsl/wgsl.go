@@ -221,6 +221,22 @@ func (w *writer) emitFragment() []string {
 		}
 		lines = append(lines, "};", "")
 	}
+	if len(w.p.FragmentOutputs) > 0 {
+		lines = append(lines, "struct FragOut {")
+		for i, ot := range w.p.FragmentOutputs {
+			loc := uint32(i)
+			if i < len(w.p.FragmentOutputMeta) {
+				loc = w.p.FragmentOutputMeta[i].Location
+			}
+			lines = append(lines, fmt.Sprintf("\t@location(%d) c%d: %s,", loc, i, w.typeStr(ot)))
+		}
+		lines = append(lines, "};", "")
+		lines = append(lines, fmt.Sprintf("@fragment fn %s(__in: StageOut, @builtin(front_facing) __front_facing: bool) -> FragOut {", entry))
+		lines = append(lines, "\tvar __fout: FragOut;")
+		lines = append(lines, w.emitBlock(w.p.FragmentFunc.Block, 1, "fragment")...)
+		lines = append(lines, "\treturn __fout;", "}", "")
+		return lines
+	}
 	lines = append(lines, fmt.Sprintf("@fragment fn %s(__in: StageOut, @builtin(front_facing) __front_facing: bool) -> @location(0) vec4<f32> {", entry))
 	lines = append(lines, w.emitBlock(w.p.FragmentFunc.Block, 1, "fragment")...)
 	lines = append(lines, "}", "")
@@ -242,11 +258,14 @@ func (w *writer) localName(stage string, idx int) string {
 		}
 	case "fragment":
 		nv := len(w.p.Varyings)
+		no := len(w.p.FragmentOutputs)
 		switch {
 		case idx == 0:
 			return "__in.position"
 		case idx < nv+1:
 			return fmt.Sprintf("__in.v%d", idx-1)
+		case idx < nv+1+no:
+			return fmt.Sprintf("__fout.c%d", idx-nv-1)
 		}
 	}
 	return fmt.Sprintf("l%d", idx)
@@ -305,6 +324,8 @@ func (w *writer) emitBlock(b *shaderir.Block, level int, stage string) []string 
 		case shaderir.Return:
 			if stage == "vertex" {
 				lines = append(lines, indent+"return __out;")
+			} else if stage == "fragment" && len(w.p.FragmentOutputs) > 0 {
+				lines = append(lines, indent+"return __fout;")
 			} else if len(s.Exprs) == 0 {
 				lines = append(lines, indent+"return;")
 			} else {

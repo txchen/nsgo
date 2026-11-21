@@ -17,10 +17,22 @@ type SoftwareRenderer struct {
 // NewSoftwareRenderer creates a pure-Go software 3D GPU renderer with a swapchain
 // of width x height pixels and an optional depthFormat (e.g. FormatDepth24Plus).
 func NewSoftwareRenderer(width, height int, depthFormat TextureFormat) *SoftwareRenderer {
+	return NewSoftwareRendererWithConfig(width, height, FormatRGBA8Unorm, depthFormat, 1)
+}
+
+// NewSoftwareRendererWithConfig creates a pure-Go software 3D GPU renderer with
+// explicit swapchain color format, depth/stencil format, and MSAA sample count (1 or 4).
+func NewSoftwareRendererWithConfig(width, height int, colorFormat, depthFormat TextureFormat, sampleCount int) *SoftwareRenderer {
+	if colorFormat == FormatUndefined {
+		colorFormat = FormatRGBA8Unorm
+	}
+	if sampleCount <= 0 {
+		sampleCount = 1
+	}
 	cfg := driver.GPUViewConfig{
-		ColorFormat: driver.GPUFormatRGBA8Unorm,
+		ColorFormat: driver.GPUTextureFormat(colorFormat),
 		DepthFormat: driver.GPUTextureFormat(depthFormat),
-		SampleCount: 1,
+		SampleCount: sampleCount,
 	}
 	soft := driver.NewGPUSoftwareDevice(width, height, cfg)
 	r := &SoftwareRenderer{soft: soft}
@@ -30,9 +42,15 @@ func NewSoftwareRenderer(width, height int, depthFormat TextureFormat) *Software
 		1,
 		width,
 		height,
-		FormatRGBA8Unorm,
+		colorFormat,
 		limitsFromDriver(driver.DefaultGPULimits()),
-		Features{Depth32Float: true},
+		Features{
+			MSAA4x:           true,
+			Depth32Float:     true,
+			Float16Filtering: true,
+			Float16Blending:  true,
+			Float32Filtering: true,
+		},
 	)
 	dev.submitFn = func(frame driver.GPUFrame) {
 		rbs, err := soft.Submit(frame)

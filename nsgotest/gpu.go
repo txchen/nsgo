@@ -93,6 +93,10 @@ func (a *App) syncGPUViews(configured []*View, resized []*View) {
 			st.generation++
 			gen := st.generation
 			readyNow[v.ID] = true
+			surfFmt := st.cfg.ColorFormat
+			if surfFmt == driver.GPUFormatUndefined {
+				surfFmt = driver.GPUFormatRGBA8Unorm
+			}
 			a.post(driver.Event{
 				Kind: driver.EventGPU,
 				ID:   v.ID,
@@ -101,9 +105,15 @@ func (a *App) syncGPUViews(configured []*View, resized []*View) {
 					Generation:    gen,
 					Width:         w,
 					Height:        h,
-					SurfaceFormat: driver.GPUFormatRGBA8Unorm,
+					SurfaceFormat: surfFmt,
 					Limits:        driver.DefaultGPULimits(),
-					Features:      driver.GPUFeatures{Depth32Float: true},
+					Features: driver.GPUFeatures{
+						MSAA4x:           true,
+						Depth32Float:     true,
+						Float16Filtering: true,
+						Float16Blending:  true,
+						Float32Filtering: true,
+					},
 				},
 			})
 		}
@@ -292,6 +302,10 @@ func (a *App) RestoreGPUDevice(selector string) {
 	st.ready = true
 	st.generation++
 	st.soft = driver.NewGPUSoftwareDevice(w, h, st.cfg)
+	surfFmt := st.cfg.ColorFormat
+	if surfFmt == driver.GPUFormatUndefined {
+		surfFmt = driver.GPUFormatRGBA8Unorm
+	}
 	owner.post(driver.Event{
 		Kind: driver.EventGPU,
 		ID:   v.ID,
@@ -300,9 +314,15 @@ func (a *App) RestoreGPUDevice(selector string) {
 			Generation:    st.generation,
 			Width:         w,
 			Height:        h,
-			SurfaceFormat: driver.GPUFormatRGBA8Unorm,
+			SurfaceFormat: surfFmt,
 			Limits:        driver.DefaultGPULimits(),
-			Features:      driver.GPUFeatures{Depth32Float: true},
+			Features: driver.GPUFeatures{
+				MSAA4x:           true,
+				Depth32Float:     true,
+				Float16Filtering: true,
+				Float16Blending:  true,
+				Float32Filtering: true,
+			},
 		},
 	})
 	a.Settle()

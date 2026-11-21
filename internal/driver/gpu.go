@@ -14,30 +14,57 @@ const (
 	GPUFormatRGBA8Unorm
 	GPUFormatRGBA8UnormSRGB
 	GPUFormatBGRA8Unorm
+	GPUFormatBGRA8UnormSRGB
 	GPUFormatRG8Unorm
 	GPUFormatR8Unorm
 	GPUFormatRGBA16Float
+	GPUFormatRG11B10Float
+	GPUFormatR32Float
+	GPUFormatRGBA32Float
 	GPUFormatDepth24Plus
 	GPUFormatDepth24PlusStencil8
 	GPUFormatDepth32Float
+	GPUFormatStencil8
 )
 
-// IsDepth reports whether f is a depth or depth-stencil texture format.
+// IsDepth reports whether f carries a depth aspect.
 func (f GPUTextureFormat) IsDepth() bool {
 	return f == GPUFormatDepth24Plus || f == GPUFormatDepth24PlusStencil8 || f == GPUFormatDepth32Float
 }
 
-// BytesPerPixel returns the texel stride in bytes for color formats (0 for depth/undefined).
+// HasStencil reports whether f carries a stencil aspect.
+func (f GPUTextureFormat) HasStencil() bool {
+	return f == GPUFormatDepth24PlusStencil8 || f == GPUFormatStencil8
+}
+
+// IsDepthStencil reports whether f is a depth, stencil, or combined depth-stencil format.
+func (f GPUTextureFormat) IsDepthStencil() bool {
+	return f.IsDepth() || f.HasStencil()
+}
+
+// IsFloat reports whether f is a floating-point color format (HDR/unclamped).
+func (f GPUTextureFormat) IsFloat() bool {
+	return f == GPUFormatRGBA16Float || f == GPUFormatRG11B10Float || f == GPUFormatR32Float || f == GPUFormatRGBA32Float
+}
+
+// IsSRGB reports whether f uses sRGB transfer encoding on load/store.
+func (f GPUTextureFormat) IsSRGB() bool {
+	return f == GPUFormatRGBA8UnormSRGB || f == GPUFormatBGRA8UnormSRGB
+}
+
+// BytesPerPixel returns the texel stride in bytes for color formats (0 for depth/stencil/undefined).
 func (f GPUTextureFormat) BytesPerPixel() uint32 {
 	switch f {
 	case GPUFormatR8Unorm:
 		return 1
 	case GPUFormatRG8Unorm:
 		return 2
-	case GPUFormatRGBA8Unorm, GPUFormatRGBA8UnormSRGB, GPUFormatBGRA8Unorm:
+	case GPUFormatRGBA8Unorm, GPUFormatRGBA8UnormSRGB, GPUFormatBGRA8Unorm, GPUFormatBGRA8UnormSRGB, GPUFormatRG11B10Float, GPUFormatR32Float:
 		return 4
 	case GPUFormatRGBA16Float:
 		return 8
+	case GPUFormatRGBA32Float:
+		return 16
 	default:
 		return 0
 	}
@@ -222,8 +249,31 @@ const (
 	GPUColorWriteGreen
 	GPUColorWriteBlue
 	GPUColorWriteAlpha
+	GPUColorWriteNone
 	GPUColorWriteAll = GPUColorWriteRed | GPUColorWriteGreen | GPUColorWriteBlue | GPUColorWriteAlpha
 )
+
+// GPUStencilOperation specifies how a stencil buffer value updates after stencil/depth testing.
+type GPUStencilOperation uint8
+
+const (
+	GPUStencilKeep GPUStencilOperation = iota
+	GPUStencilZero
+	GPUStencilReplace
+	GPUStencilInvert
+	GPUStencilIncrementClamp
+	GPUStencilDecrementClamp
+	GPUStencilIncrementWrap
+	GPUStencilDecrementWrap
+)
+
+// GPUStencilFaceState configures stencil comparison and update operations for one winding face.
+type GPUStencilFaceState struct {
+	Compare     GPUCompareFunc
+	FailOp      GPUStencilOperation
+	DepthFailOp GPUStencilOperation
+	PassOp      GPUStencilOperation
+}
 
 // GPULoadOp specifies what happens to an attachment at the start of a render pass.
 type GPULoadOp uint8
@@ -303,6 +353,7 @@ type GPULimits struct {
 	MaxVertexBuffers          uint32
 	MaxVertexAttributes       uint32
 	MinUniformBufferAlignment uint32
+	MaxColorAttachments       uint32
 }
 
 // DefaultGPULimits returns conservative portable Stage 1 GPU limits.
@@ -315,16 +366,20 @@ func DefaultGPULimits() GPULimits {
 		MaxVertexBuffers:          8,
 		MaxVertexAttributes:       16,
 		MinUniformBufferAlignment: 256,
+		MaxColorAttachments:       4,
 	}
 }
 
 // GPUFeatures reports optional GPU capabilities supported by the active device.
 type GPUFeatures struct {
-	StorageBuffers bool
-	Compute        bool
-	MSAA4x         bool
-	Depth32Float   bool
-	Anisotropy     bool
+	StorageBuffers   bool
+	Compute          bool
+	MSAA4x           bool
+	Depth32Float     bool
+	Anisotropy       bool
+	Float16Filtering bool
+	Float16Blending  bool
+	Float32Filtering bool
 }
 
 // GPUBufferDesc describes a GPU buffer allocation.
@@ -418,13 +473,18 @@ type GPUPrimitiveState struct {
 	CullMode  GPUCullMode
 }
 
-// GPUDepthStencilState configures depth testing and writing.
+// GPUDepthStencilState configures depth and stencil testing, writing, and depth bias.
 type GPUDepthStencilState struct {
 	Format              GPUTextureFormat
 	DepthWrite          bool
 	DepthCompare        GPUCompareFunc
+	StencilFront        GPUStencilFaceState
+	StencilBack         GPUStencilFaceState
+	StencilReadMask     uint32
+	StencilWriteMask    uint32
 	DepthBias           int32
 	DepthBiasSlopeScale float32
+	DepthBiasClamp      float32
 }
 
 // GPUBlendComponent describes one channel (color or alpha) blend equation.
@@ -597,11 +657,15 @@ const (
 	GPUCopyBufferToBuffer GPUCopyOpKind = iota + 1
 	GPUCopyBufferToTexture
 	GPUCopyTextureToTexture
+	GPUCopyResolveTexture
 )
 
-// GPUCopyOp describes a buffer/texture copy recorded on an encoder.
+// GPUCopyOp describes a buffer/texture copy or MSAA resolve recorded on an encoder.
+// AfterPass orders the copy relative to GPUFrame.Passes: 0 runs before Passes[0],
+// and k > 0 runs immediately after Passes[k-1].
 type GPUCopyOp struct {
 	Kind      GPUCopyOpKind
+	AfterPass int
 	SrcID     GPUID
 	DstID     GPUID
 	SrcOffset uint64

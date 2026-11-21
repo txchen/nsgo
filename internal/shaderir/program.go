@@ -70,11 +70,13 @@ type Program struct {
 
 	// GPU pipeline metadata (docs/architecture/gpu.md). Left empty for legacy
 	// fragment-only shaders so existing FragmentLibrary paths stay unchanged.
-	AttributeMeta []StageIO
-	VaryingMeta   []StageIO
-	Bindings      []Binding
-	VertexEntry   string
-	FragmentEntry string
+	AttributeMeta      []StageIO
+	VaryingMeta        []StageIO
+	FragmentOutputs    []Type
+	FragmentOutputMeta []StageIO
+	Bindings           []Binding
+	VertexEntry        string
+	FragmentEntry      string
 
 	SourceID SourceID
 

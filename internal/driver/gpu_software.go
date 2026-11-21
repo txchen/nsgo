@@ -24,9 +24,11 @@ type softBuffer struct {
 }
 
 type softTexture struct {
-	desc  GPUTextureDesc
-	rgba  []byte    // 4 bytes per pixel for color formats
-	depth []float32 // 1 float32 per pixel for depth formats
+	desc    GPUTextureDesc
+	samples int
+	color   []float32 // w * h * samples * 4 linear RGBA float32
+	depth   []float32 // w * h * samples when Format.IsDepth()
+	stencil []uint8   // w * h * samples when Format.HasStencil()
 }
 
 type softSampler struct {
@@ -52,8 +54,11 @@ type softPipeline struct {
 type GPUSoftwareDevice struct {
 	width, height int
 	cfg           GPUViewConfig
+	swapSamples   int
 	colorBuf      []byte
+	swapColor     []float32
 	depthBuf      []float32
+	stencilBuf    []uint8
 
 	buffers    map[GPUID]*softBuffer
 	textures   map[GPUID]*softTexture
@@ -73,20 +78,28 @@ func NewGPUSoftwareDevice(width, height int, cfg GPUViewConfig) *GPUSoftwareDevi
 	if height <= 0 {
 		height = 1
 	}
+	samples := 1
+	if cfg.SampleCount == 4 {
+		samples = 4
+	}
+	if cfg.ColorFormat == GPUFormatUndefined {
+		cfg.ColorFormat = GPUFormatRGBA8Unorm
+	}
 	d := &GPUSoftwareDevice{
-		cfg:        cfg,
-		buffers:    map[GPUID]*softBuffer{},
-		textures:   map[GPUID]*softTexture{},
-		samplers:   map[GPUID]*softSampler{},
-		layouts:    map[GPUID]*softBindGroupLayout{},
-		bindGroups: map[GPUID]*softBindGroup{},
-		pipelines:  map[GPUID]*softPipeline{},
+		cfg:         cfg,
+		swapSamples: samples,
+		buffers:     map[GPUID]*softBuffer{},
+		textures:    map[GPUID]*softTexture{},
+		samplers:    map[GPUID]*softSampler{},
+		layouts:     map[GPUID]*softBindGroupLayout{},
+		bindGroups:  map[GPUID]*softBindGroup{},
+		pipelines:   map[GPUID]*softPipeline{},
 	}
 	d.Resize(width, height)
 	return d
 }
 
-// Resize reallocates the swapchain color and depth buffers for a new pixel size.
+// Resize reallocates the swapchain color, depth, and stencil buffers for a new pixel size.
 func (d *GPUSoftwareDevice) Resize(width, height int) {
 	if width <= 0 {
 		width = 1
@@ -99,10 +112,13 @@ func (d *GPUSoftwareDevice) Resize(width, height int) {
 	}
 	d.width, d.height = width, height
 	d.colorBuf = make([]byte, width*height*4)
-	d.depthBuf = make([]float32, width*height)
+	nSamp := width * height * max(d.swapSamples, 1)
+	d.swapColor = make([]float32, nSamp*4)
+	d.depthBuf = make([]float32, nSamp)
 	for i := range d.depthBuf {
 		d.depthBuf[i] = 1.0
 	}
+	d.stencilBuf = make([]uint8, nSamp)
 }
 
 // Size returns the current swapchain dimensions in pixels.
@@ -141,13 +157,29 @@ func (d *GPUSoftwareDevice) Submit(frame GPUFrame) ([]GPUSoftReadback, error) {
 		}
 	}
 	for _, cp := range frame.Copies {
-		if err := d.execCopy(cp); err != nil {
-			return readbacks, err
+		if cp.AfterPass <= 0 {
+			if err := d.execCopy(cp); err != nil {
+				return readbacks, err
+			}
 		}
 	}
-	for _, pass := range frame.Passes {
+	for pi, pass := range frame.Passes {
 		if err := d.execPass(pass); err != nil {
 			return readbacks, err
+		}
+		for _, cp := range frame.Copies {
+			if cp.AfterPass == pi+1 {
+				if err := d.execCopy(cp); err != nil {
+					return readbacks, err
+				}
+			}
+		}
+	}
+	for _, cp := range frame.Copies {
+		if cp.AfterPass > len(frame.Passes) {
+			if err := d.execCopy(cp); err != nil {
+				return readbacks, err
+			}
 		}
 	}
 	return readbacks, nil
@@ -185,14 +217,23 @@ func (d *GPUSoftwareDevice) execOp(op GPUResourceOp) (*GPUSoftReadback, error) {
 		if w <= 0 || h <= 0 {
 			return nil, fmt.Errorf("gpu: invalid texture size %dx%d", w, h)
 		}
-		st := &softTexture{desc: *op.Texture}
+		samples := max(op.Texture.SampleCount, 1)
+		if samples != 1 && samples != 4 {
+			return nil, fmt.Errorf("gpu: unsupported sample count %d", samples)
+		}
+		st := &softTexture{desc: *op.Texture, samples: samples}
+		nSamp := w * h * samples
 		if op.Texture.Format.IsDepth() {
-			st.depth = make([]float32, w*h)
+			st.depth = make([]float32, nSamp)
 			for i := range st.depth {
 				st.depth[i] = 1.0
 			}
-		} else {
-			st.rgba = make([]byte, w*h*4)
+		}
+		if op.Texture.Format.HasStencil() {
+			st.stencil = make([]uint8, nSamp)
+		}
+		if !op.Texture.Format.IsDepthStencil() {
+			st.color = make([]float32, nSamp*4)
 		}
 		d.textures[op.ID] = st
 	case GPUOpWriteTexture:
@@ -200,7 +241,7 @@ func (d *GPUSoftwareDevice) execOp(op GPUResourceOp) (*GPUSoftReadback, error) {
 		if !ok {
 			return nil, fmt.Errorf("gpu: write to unknown texture %d", op.TextureDst.Texture)
 		}
-		if tex.rgba == nil {
+		if tex.color == nil {
 			return nil, nil
 		}
 		w, h := int(tex.desc.Width), int(tex.desc.Height)
@@ -227,28 +268,14 @@ func (d *GPUSoftwareDevice) execOp(op GPUResourceOp) (*GPUSoftReadback, error) {
 				if si+bpp > len(src) {
 					break
 				}
-				di := ((y+oy)*w + (x + ox)) * 4
-				switch tex.desc.Format {
-				case GPUFormatBGRA8Unorm:
-					tex.rgba[di+0] = src[si+2]
-					tex.rgba[di+1] = src[si+1]
-					tex.rgba[di+2] = src[si+0]
-					tex.rgba[di+3] = src[si+3]
-				case GPUFormatR8Unorm:
-					tex.rgba[di+0] = src[si]
-					tex.rgba[di+1] = 0
-					tex.rgba[di+2] = 0
-					tex.rgba[di+3] = 255
-				case GPUFormatRG8Unorm:
-					tex.rgba[di+0] = src[si]
-					tex.rgba[di+1] = src[si+1]
-					tex.rgba[di+2] = 0
-					tex.rgba[di+3] = 255
-				default:
-					tex.rgba[di+0] = src[si+0]
-					tex.rgba[di+1] = src[si+1]
-					tex.rgba[di+2] = src[si+2]
-					tex.rgba[di+3] = src[si+3]
+				c := quantizeColorForFormat(tex.desc.Format, decodePixelBytes(src[si:si+bpp], tex.desc.Format))
+				pixIdx := (y+oy)*w + (x + ox)
+				for s := 0; s < tex.samples; s++ {
+					di := (pixIdx*tex.samples + s) * 4
+					tex.color[di+0] = c[0]
+					tex.color[di+1] = c[1]
+					tex.color[di+2] = c[2]
+					tex.color[di+3] = c[3]
 				}
 			}
 		}
@@ -288,17 +315,33 @@ func (d *GPUSoftwareDevice) execOp(op GPUResourceOp) (*GPUSoftReadback, error) {
 	case GPUOpDestroyPipeline:
 		delete(d.pipelines, op.ID)
 	case GPUOpReadTexture:
-		var src []byte
-		var tw, th int
 		if op.ReadbackSurface || op.ID == 0 {
-			src, tw, th = d.colorBuf, d.width, d.height
-		} else {
-			tex, ok := d.textures[op.ID]
-			if !ok {
-				return &GPUSoftReadback{ID: op.ReadbackID, Err: fmt.Sprintf("unknown texture %d", op.ID)}, nil
+			tw, th := d.width, d.height
+			rx, ry := int(op.ReadbackRegion.X), int(op.ReadbackRegion.Y)
+			rw, rh := int(op.ReadbackRegion.Width), int(op.ReadbackRegion.Height)
+			if rw == 0 {
+				rw = tw - rx
 			}
-			src, tw, th = tex.rgba, int(tex.desc.Width), int(tex.desc.Height)
+			if rh == 0 {
+				rh = th - ry
+			}
+			if rx < 0 || ry < 0 || rw <= 0 || rh <= 0 || rx+rw > tw || ry+rh > th {
+				return &GPUSoftReadback{ID: op.ReadbackID, Err: "readback region out of bounds"}, nil
+			}
+			out := make([]byte, rw*rh*4)
+			for y := 0; y < rh; y++ {
+				copy(out[y*rw*4:(y+1)*rw*4], d.colorBuf[((ry+y)*tw+rx)*4:((ry+y)*tw+rx+rw)*4])
+			}
+			return &GPUSoftReadback{ID: op.ReadbackID, Pixels: out}, nil
 		}
+		tex, ok := d.textures[op.ID]
+		if !ok {
+			return &GPUSoftReadback{ID: op.ReadbackID, Err: fmt.Sprintf("unknown texture %d", op.ID)}, nil
+		}
+		if tex.color == nil {
+			return &GPUSoftReadback{ID: op.ReadbackID, Err: "cannot read back non-color texture"}, nil
+		}
+		tw, th := int(tex.desc.Width), int(tex.desc.Height)
 		rx, ry := int(op.ReadbackRegion.X), int(op.ReadbackRegion.Y)
 		rw, rh := int(op.ReadbackRegion.Width), int(op.ReadbackRegion.Height)
 		if rw == 0 {
@@ -310,9 +353,27 @@ func (d *GPUSoftwareDevice) execOp(op GPUResourceOp) (*GPUSoftReadback, error) {
 		if rx < 0 || ry < 0 || rw <= 0 || rh <= 0 || rx+rw > tw || ry+rh > th {
 			return &GPUSoftReadback{ID: op.ReadbackID, Err: "readback region out of bounds"}, nil
 		}
-		out := make([]byte, rw*rh*4)
+		bpp := readbackBytesPerPixel(tex.desc.Format)
+		out := make([]byte, rw*rh*bpp)
+		invSamp := float32(1.0) / float32(max(tex.samples, 1))
 		for y := 0; y < rh; y++ {
-			copy(out[y*rw*4:(y+1)*rw*4], src[((ry+y)*tw+rx)*4:((ry+y)*tw+rx+rw)*4])
+			for x := 0; x < rw; x++ {
+				pixIdx := (ry+y)*tw + (rx + x)
+				var avg [4]float32
+				for s := 0; s < tex.samples; s++ {
+					si := (pixIdx*tex.samples + s) * 4
+					avg[0] += tex.color[si+0]
+					avg[1] += tex.color[si+1]
+					avg[2] += tex.color[si+2]
+					avg[3] += tex.color[si+3]
+				}
+				avg[0] *= invSamp
+				avg[1] *= invSamp
+				avg[2] *= invSamp
+				avg[3] *= invSamp
+				di := (y*rw + x) * bpp
+				encodePixelBytes(out[di:di+bpp], tex.desc.Format, avg)
+			}
 		}
 		return &GPUSoftReadback{ID: op.ReadbackID, Pixels: out}, nil
 	}
@@ -334,15 +395,32 @@ func (d *GPUSoftwareDevice) execCopy(cp GPUCopyOp) error {
 	case GPUCopyTextureToTexture:
 		s, ok1 := d.textures[cp.SrcTex.Texture]
 		t, ok2 := d.textures[cp.DstTex.Texture]
-		if !ok1 || !ok2 || s.rgba == nil || t.rgba == nil {
+		if !ok1 || !ok2 || s.color == nil || t.color == nil {
 			return fmt.Errorf("gpu: CopyTextureToTexture references unknown texture")
 		}
 		sw, dw := int(s.desc.Width), int(t.desc.Width)
 		for y := 0; y < int(cp.Height); y++ {
-			si := ((int(cp.SrcTex.OriginY)+y)*sw + int(cp.SrcTex.OriginX)) * 4
-			di := ((int(cp.DstTex.OriginY)+y)*dw + int(cp.DstTex.OriginX)) * 4
-			copy(t.rgba[di:di+int(cp.Width)*4], s.rgba[si:si+int(cp.Width)*4])
+			for x := 0; x < int(cp.Width); x++ {
+				sp := (int(cp.SrcTex.OriginY)+y)*sw + int(cp.SrcTex.OriginX) + x
+				dp := (int(cp.DstTex.OriginY)+y)*dw + int(cp.DstTex.OriginX) + x
+				si := sp * s.samples * 4
+				c := quantizeColorForFormat(t.desc.Format, [4]float32{s.color[si], s.color[si+1], s.color[si+2], s.color[si+3]})
+				for k := 0; k < t.samples; k++ {
+					di := (dp*t.samples + k) * 4
+					t.color[di+0] = c[0]
+					t.color[di+1] = c[1]
+					t.color[di+2] = c[2]
+					t.color[di+3] = c[3]
+				}
+			}
 		}
+	case GPUCopyResolveTexture:
+		s, ok1 := d.textures[cp.SrcTex.Texture]
+		t, ok2 := d.textures[cp.DstTex.Texture]
+		if !ok1 || !ok2 || s.color == nil || t.color == nil {
+			return fmt.Errorf("gpu: ResolveTexture references unknown texture")
+		}
+		resolveColorBuffers(s.color, s.samples, int(s.desc.Width), int(s.desc.Height), t.color, t.desc.Format, int(t.desc.Width), int(t.desc.Height))
 	}
 	return nil
 }
@@ -360,6 +438,8 @@ func mergeShaderPrograms(vs, fs *shaderir.Program) *shaderir.Program {
 	// Separate VS and FS modules: keep VS's attributes/bindings/VertexFunc and FS's FragmentFunc.
 	out := *vs
 	out.FragmentFunc = fs.FragmentFunc
+	out.FragmentOutputs = fs.FragmentOutputs
+	out.FragmentOutputMeta = fs.FragmentOutputMeta
 	if len(fs.Varyings) > len(out.Varyings) {
 		out.Varyings = fs.Varyings
 		out.VaryingMeta = fs.VaryingMeta
@@ -367,50 +447,143 @@ func mergeShaderPrograms(vs, fs *shaderir.Program) *shaderir.Program {
 	return &out
 }
 
+type softColorTarget struct {
+	color      []float32
+	format     GPUTextureFormat
+	samples    int
+	width      int
+	height     int
+	isSwap     bool
+	resolveTex *softTexture
+}
+
+var (
+	msaa1Offsets = [1][2]float32{{0.5, 0.5}}
+	msaa4Offsets = [4][2]float32{
+		{0.375, 0.125},
+		{0.875, 0.375},
+		{0.125, 0.625},
+		{0.625, 0.875},
+	}
+)
+
 func (d *GPUSoftwareDevice) execPass(pass GPUPass) error {
-	var colorPix []byte
+	var colorTargets []softColorTarget
 	var depthPix []float32
+	var stencilPix []uint8
+	var dsFormat GPUTextureFormat
 	var targetW, targetH int
+	passSamples := 1
+
+	attachSwap := func(ca GPUColorAttachment) {
+		ct := softColorTarget{
+			color:   d.swapColor,
+			format:  d.cfg.ColorFormat,
+			samples: max(d.swapSamples, 1),
+			width:   d.width,
+			height:  d.height,
+			isSwap:  true,
+		}
+		if ct.format == GPUFormatUndefined {
+			ct.format = GPUFormatRGBA8Unorm
+		}
+		if ca.LoadOp == GPULoadClear {
+			r, g, b, a := ca.ClearColor.Components()
+			clearColorBuffer(ct.color, ct.format, [4]float32{float32(r), float32(g), float32(b), float32(a)})
+		}
+		colorTargets = append(colorTargets, ct)
+		if targetW == 0 {
+			targetW, targetH, passSamples = ct.width, ct.height, ct.samples
+		}
+	}
 
 	if len(pass.ColorAttachments) > 0 {
-		ca := pass.ColorAttachments[0]
-		if ca.Texture == 0 {
-			colorPix, targetW, targetH = d.colorBuf, d.width, d.height
-		} else {
+		for _, ca := range pass.ColorAttachments {
+			if ca.Texture == 0 {
+				attachSwap(ca)
+				continue
+			}
 			tex, ok := d.textures[ca.Texture]
 			if !ok {
 				return fmt.Errorf("gpu: render pass color attachment %d not found", ca.Texture)
 			}
-			colorPix, targetW, targetH = tex.rgba, int(tex.desc.Width), int(tex.desc.Height)
-		}
-		if ca.LoadOp == GPULoadClear {
-			r, g, b, a := ca.ClearColor.Components()
-			rb, gb, bb, ab := floatToByte(float32(r)), floatToByte(float32(g)), floatToByte(float32(b)), floatToByte(float32(a))
-			for i := 0; i+3 < len(colorPix); i += 4 {
-				colorPix[i+0] = rb
-				colorPix[i+1] = gb
-				colorPix[i+2] = bb
-				colorPix[i+3] = ab
+			if tex.color == nil {
+				return fmt.Errorf("gpu: render pass color attachment %d is not a color texture", ca.Texture)
+			}
+			var resolveTex *softTexture
+			if ca.ResolveTarget != 0 {
+				rt, ok := d.textures[ca.ResolveTarget]
+				if !ok {
+					return fmt.Errorf("gpu: render pass resolve target %d not found", ca.ResolveTarget)
+				}
+				if rt.color == nil {
+					return fmt.Errorf("gpu: render pass resolve target %d is not a color texture", ca.ResolveTarget)
+				}
+				resolveTex = rt
+			}
+			ct := softColorTarget{
+				color:      tex.color,
+				format:     tex.desc.Format,
+				samples:    max(tex.samples, 1),
+				width:      int(tex.desc.Width),
+				height:     int(tex.desc.Height),
+				resolveTex: resolveTex,
+			}
+			if ca.LoadOp == GPULoadClear {
+				r, g, b, a := ca.ClearColor.Components()
+				clearColorBuffer(ct.color, ct.format, [4]float32{float32(r), float32(g), float32(b), float32(a)})
+			}
+			colorTargets = append(colorTargets, ct)
+			if targetW == 0 {
+				targetW, targetH, passSamples = ct.width, ct.height, ct.samples
 			}
 		}
-	} else {
-		colorPix, targetW, targetH = d.colorBuf, d.width, d.height
+	} else if pass.DepthStencil == nil || pass.DepthStencil.Texture == 0 {
+		attachSwap(GPUColorAttachment{LoadOp: GPULoadLoad, StoreOp: GPUStoreStore})
 	}
 
 	if pass.DepthStencil != nil {
 		ds := pass.DepthStencil
 		if ds.Texture == 0 {
-			depthPix = d.depthBuf
-		} else if tex, ok := d.textures[ds.Texture]; ok && tex.depth != nil {
+			dsFormat = d.cfg.DepthFormat
+			if dsFormat.IsDepth() {
+				depthPix = d.depthBuf
+			}
+			if dsFormat.HasStencil() {
+				stencilPix = d.stencilBuf
+			}
+			if targetW == 0 {
+				targetW, targetH, passSamples = d.width, d.height, max(d.swapSamples, 1)
+			}
+		} else if tex, ok := d.textures[ds.Texture]; ok {
+			dsFormat = tex.desc.Format
 			depthPix = tex.depth
+			stencilPix = tex.stencil
+			if targetW == 0 {
+				targetW, targetH, passSamples = int(tex.desc.Width), int(tex.desc.Height), max(tex.samples, 1)
+			}
+		} else {
+			return fmt.Errorf("gpu: render pass depth-stencil attachment %d not found", ds.Texture)
 		}
 		if depthPix != nil && ds.DepthLoadOp == GPULoadClear {
 			for i := range depthPix {
 				depthPix[i] = ds.ClearDepth
 			}
 		}
-	} else if d.cfg.DepthFormat.IsDepth() && len(pass.ColorAttachments) > 0 && pass.ColorAttachments[0].Texture == 0 {
-		depthPix = d.depthBuf
+		if stencilPix != nil && ds.StencilLoadOp == GPULoadClear {
+			v := uint8(ds.ClearStencil & 0xFF)
+			for i := range stencilPix {
+				stencilPix[i] = v
+			}
+		}
+	} else if d.cfg.DepthFormat.IsDepthStencil() && len(colorTargets) > 0 && colorTargets[0].isSwap {
+		dsFormat = d.cfg.DepthFormat
+		if dsFormat.IsDepth() {
+			depthPix = d.depthBuf
+		}
+		if dsFormat.HasStencil() {
+			stencilPix = d.stencilBuf
+		}
 	}
 
 	// Render pass state
@@ -428,6 +601,7 @@ func (d *GPUSoftwareDevice) execPass(pass GPUPass) error {
 	var idxFmt GPUIndexFormat
 	var idxOff uint64
 	blendConst := [4]float32{0, 0, 0, 0}
+	var stencilRef uint8
 
 	draw := func(indexed bool, count, instances, first, firstInst uint32, baseVertex int32) error {
 		if pipe == nil || pipe.combined == nil || pipe.combined.VertexFunc.Block == nil {
@@ -438,18 +612,22 @@ func (d *GPUSoftwareDevice) execPass(pass GPUPass) error {
 		}
 		prog := pipe.combined
 		ctx := &softDrawCtx{
-			dev:        d,
-			prog:       prog,
-			pipe:       pipe,
-			bindGroups: bindGroups,
-			colorPix:   colorPix,
-			depthPix:   depthPix,
-			targetW:    targetW,
-			targetH:    targetH,
-			vpX:        vpX, vpY: vpY, vpW: vpW, vpH: vpH,
+			dev:          d,
+			prog:         prog,
+			pipe:         pipe,
+			bindGroups:   bindGroups,
+			colorTargets: colorTargets,
+			depthPix:     depthPix,
+			stencilPix:   stencilPix,
+			dsFormat:     dsFormat,
+			sampleCount:  passSamples,
+			targetW:      targetW,
+			targetH:      targetH,
+			vpX:          vpX, vpY: vpY, vpW: vpW, vpH: vpH,
 			vpMinD: vpMinD, vpMaxD: vpMaxD,
 			scX: int(scX), scY: int(scY), scW: int(scW), scH: int(scH),
 			blendConst: blendConst,
+			stencilRef: stencilRef,
 		}
 		fetchIndex := func(i uint32) (uint32, error) {
 			if !indexed {
@@ -595,6 +773,8 @@ func (d *GPUSoftwareDevice) execPass(pass GPUPass) error {
 				return fmt.Errorf("gpu: unknown index buffer %d", cmd.ID)
 			}
 			idxBuf, idxFmt, idxOff = b, cmd.IndexFormat, cmd.Offset
+		case GPUCmdSetStencilReference:
+			stencilRef = uint8(cmd.U0 & 0xFF)
 		case GPUCmdSetBlendConstant:
 			blendConst = [4]float32{cmd.F0, cmd.F1, cmd.F2, cmd.F3}
 		case GPUCmdDraw:
@@ -615,27 +795,116 @@ func (d *GPUSoftwareDevice) execPass(pass GPUPass) error {
 			}
 		}
 	}
+
+	// End-of-pass MSAA resolve and swapchain snapshot flush.
+	for _, ct := range colorTargets {
+		if ct.isSwap {
+			d.flushSwapchain()
+		} else if ct.resolveTex != nil {
+			resolveColorBuffers(ct.color, ct.samples, ct.width, ct.height, ct.resolveTex.color, ct.resolveTex.desc.Format, int(ct.resolveTex.desc.Width), int(ct.resolveTex.desc.Height))
+		}
+	}
 	return nil
+}
+
+func (d *GPUSoftwareDevice) flushSwapchain() {
+	n := d.width * d.height
+	samples := max(d.swapSamples, 1)
+	invSamp := float32(1.0) / float32(samples)
+	fmtVal := d.cfg.ColorFormat
+	if fmtVal == GPUFormatUndefined {
+		fmtVal = GPUFormatRGBA8Unorm
+	}
+	for p := 0; p < n; p++ {
+		var avg [4]float32
+		for s := 0; s < samples; s++ {
+			si := (p*samples + s) * 4
+			avg[0] += d.swapColor[si+0]
+			avg[1] += d.swapColor[si+1]
+			avg[2] += d.swapColor[si+2]
+			avg[3] += d.swapColor[si+3]
+		}
+		avg[0] *= invSamp
+		avg[1] *= invSamp
+		avg[2] *= invSamp
+		avg[3] *= invSamp
+		di := p * 4
+		if fmtVal.IsSRGB() {
+			d.colorBuf[di+0] = floatToByte(linearToSRGB(avg[0]))
+			d.colorBuf[di+1] = floatToByte(linearToSRGB(avg[1]))
+			d.colorBuf[di+2] = floatToByte(linearToSRGB(avg[2]))
+			d.colorBuf[di+3] = floatToByte(avg[3])
+		} else {
+			d.colorBuf[di+0] = floatToByte(avg[0])
+			d.colorBuf[di+1] = floatToByte(avg[1])
+			d.colorBuf[di+2] = floatToByte(avg[2])
+			d.colorBuf[di+3] = floatToByte(avg[3])
+		}
+	}
+}
+
+func resolveColorBuffers(src []float32, srcSamples, srcW, srcH int, dst []float32, dstFmt GPUTextureFormat, dstW, dstH int) {
+	w := min(srcW, dstW)
+	h := min(srcH, dstH)
+	samples := max(srcSamples, 1)
+	invSamp := float32(1.0) / float32(samples)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			sp := y*srcW + x
+			var avg [4]float32
+			for s := 0; s < samples; s++ {
+				si := (sp*samples + s) * 4
+				avg[0] += src[si+0]
+				avg[1] += src[si+1]
+				avg[2] += src[si+2]
+				avg[3] += src[si+3]
+			}
+			avg[0] *= invSamp
+			avg[1] *= invSamp
+			avg[2] *= invSamp
+			avg[3] *= invSamp
+			q := quantizeColorForFormat(dstFmt, avg)
+			di := (y*dstW + x) * 4
+			dst[di+0] = q[0]
+			dst[di+1] = q[1]
+			dst[di+2] = q[2]
+			dst[di+3] = q[3]
+		}
+	}
+}
+
+func clearColorBuffer(buf []float32, format GPUTextureFormat, clearRGBA [4]float32) {
+	q := quantizeColorForFormat(format, clearRGBA)
+	for i := 0; i+3 < len(buf); i += 4 {
+		buf[i+0] = q[0]
+		buf[i+1] = q[1]
+		buf[i+2] = q[2]
+		buf[i+3] = q[3]
+	}
 }
 
 // --- Software rasterizer & shaderir VM ---
 
 type softDrawCtx struct {
-	dev        *GPUSoftwareDevice
-	prog       *shaderir.Program
-	pipe       *softPipeline
-	bindGroups map[uint32]*softBindGroup
-	colorPix   []byte
-	depthPix   []float32
-	targetW    int
-	targetH    int
-	vpX, vpY   float32
-	vpW, vpH   float32
-	vpMinD     float32
-	vpMaxD     float32
-	scX, scY   int
-	scW, scH   int
-	blendConst [4]float32
+	dev          *GPUSoftwareDevice
+	prog         *shaderir.Program
+	pipe         *softPipeline
+	bindGroups   map[uint32]*softBindGroup
+	colorTargets []softColorTarget
+	depthPix     []float32
+	stencilPix   []uint8
+	dsFormat     GPUTextureFormat
+	sampleCount  int
+	targetW      int
+	targetH      int
+	vpX, vpY     float32
+	vpW, vpH     float32
+	vpMinD       float32
+	vpMaxD       float32
+	scX, scY     int
+	scW, scH     int
+	blendConst   [4]float32
+	stencilRef   uint8
 }
 
 type shadedVertex struct {
@@ -673,17 +942,25 @@ func (c *softDrawCtx) runVertex(attrs []irVal, vertID, instID uint32) shadedVert
 	return out
 }
 
-func (c *softDrawCtx) runFragment(fragCoord [4]float32, varyings []irVal, frontFacing bool) ([4]float32, bool) {
+const maxSoftColorAttachments = 4
+
+func (c *softDrawCtx) runFragment(fragCoord [4]float32, varyings []irVal, frontFacing bool) ([maxSoftColorAttachments][4]float32, bool) {
+	var outs [maxSoftColorAttachments][4]float32
 	p := c.prog
 	if p.FragmentFunc.Block == nil {
-		return [4]float32{1, 1, 1, 1}, false
+		outs[0] = [4]float32{1, 1, 1, 1}
+		return outs, false
 	}
 	nv := len(p.Varyings)
-	pseudo := nv + 1
+	no := len(p.FragmentOutputs)
+	pseudo := nv + 1 + no
 	locals := make([]irVal, pseudo+len(p.FragmentFunc.Block.LocalVars))
 	locals[0] = irVal{typ: shaderir.Type{Main: shaderir.Vec4}, f: [16]float32{fragCoord[0], fragCoord[1], fragCoord[2], fragCoord[3]}}
 	for i := 0; i < nv && i < len(varyings); i++ {
 		locals[1+i] = varyings[i]
+	}
+	for i, ot := range p.FragmentOutputs {
+		locals[nv+1+i] = zeroIRVal(ot)
 	}
 	for i, lt := range p.FragmentFunc.Block.LocalVars {
 		locals[pseudo+i] = zeroIRVal(lt)
@@ -696,9 +973,26 @@ func (c *softDrawCtx) runFragment(fragCoord [4]float32, varyings []irVal, frontF
 	}
 	vm.execBlock(p.FragmentFunc.Block)
 	if vm.discarded {
-		return [4]float32{}, true
+		return outs, true
 	}
-	return [4]float32{vm.retVal.f[0], vm.retVal.f[1], vm.retVal.f[2], vm.retVal.f[3]}, false
+	if no == 0 {
+		outs[0] = [4]float32{vm.retVal.f[0], vm.retVal.f[1], vm.retVal.f[2], vm.retVal.f[3]}
+		return outs, false
+	}
+	for i := 0; i < no; i++ {
+		loc := uint32(i)
+		if i < len(p.FragmentOutputMeta) {
+			loc = p.FragmentOutputMeta[i].Location
+		}
+		if loc < maxSoftColorAttachments {
+			v := locals[nv+1+i]
+			outs[loc] = [4]float32{v.f[0], v.f[1], v.f[2], v.f[3]}
+			if p.FragmentOutputs[i].Main == shaderir.Float {
+				outs[loc][3] = 1.0
+			}
+		}
+	}
+	return outs, false
 }
 
 func (c *softDrawCtx) rasterTriangle(v0, v1, v2 shadedVertex) {
@@ -766,32 +1060,111 @@ func (c *softDrawCtx) rasterTriangle(v0, v1, v2 shadedVertex) {
 	interpVaryings := make([]irVal, nv)
 	ds := c.pipe.desc.DepthStencil
 
+	// Per-triangle depth bias (constant + slope-scaled, clamped).
+	var depthBias float32
+	hasDepthBias := ds != nil && (ds.DepthBias != 0 || ds.DepthBiasSlopeScale != 0)
+	if hasDepthBias {
+		dzdx := ((y1-y2)*z0 + (y2-y0)*z1 + (y0-y1)*z2) * invArea
+		dzdy := ((x2-x1)*z0 + (x0-x2)*z1 + (x1-x0)*z2) * invArea
+		maxSlope := max(float32(math.Abs(float64(dzdx))), float32(math.Abs(float64(dzdy))))
+		r := float32(1.0) / float32((1<<24)-1)
+		if c.dsFormat == GPUFormatDepth32Float {
+			maxZ := max(z0, max(z1, z2))
+			r = max(float32(1.0)/float32(1<<23), math.Nextafter32(maxZ, 2.0)-maxZ)
+		}
+		depthBias = float32(ds.DepthBias)*r + ds.DepthBiasSlopeScale*maxSlope
+		if ds.DepthBiasClamp > 0 && depthBias > ds.DepthBiasClamp {
+			depthBias = ds.DepthBiasClamp
+		} else if ds.DepthBiasClamp < 0 && depthBias < ds.DepthBiasClamp {
+			depthBias = ds.DepthBiasClamp
+		}
+	}
+
+	// Active stencil face state & masks.
+	var stencilFace GPUStencilFaceState
+	var stencilReadMask, stencilWriteMask uint8 = 0xFF, 0xFF
+	if ds != nil {
+		if frontFacing {
+			stencilFace = ds.StencilFront
+		} else {
+			stencilFace = ds.StencilBack
+		}
+		if ds.StencilReadMask != 0 {
+			stencilReadMask = uint8(ds.StencilReadMask & 0xFF)
+		}
+		if ds.StencilWriteMask != 0 {
+			stencilWriteMask = uint8(ds.StencilWriteMask & 0xFF)
+		}
+	}
+
+	sampleCount := max(c.sampleCount, 1)
+	var sampleOffsets [][2]float32
+	if sampleCount == 4 {
+		sampleOffsets = msaa4Offsets[:]
+	} else {
+		sampleCount = 1
+		sampleOffsets = msaa1Offsets[:]
+	}
+	hasDepthTest := ds != nil && c.depthPix != nil && c.dsFormat.IsDepth()
+	hasStencilTest := ds != nil && c.stencilPix != nil && c.dsFormat.HasStencil()
+
+	baryAt := func(fx, fy float32) (w0, w1, w2 float32) {
+		w0 = ((x1-fx)*(y2-fy) - (y1-fy)*(x2-fx)) * invArea
+		w1 = ((x2-fx)*(y0-fy) - (y2-fy)*(x0-fx)) * invArea
+		w2 = 1.0 - w0 - w1
+		return
+	}
+
+	var sampleCovered [4]bool
+	var sampleDepth [4]float32
+
 	for py := minY; py <= maxY; py++ {
-		fy := float32(py) + 0.5
 		for px := minX; px <= maxX; px++ {
-			fx := float32(px) + 0.5
-			w0 := ((x1-fx)*(y2-fy) - (y1-fy)*(x2-fx)) * invArea
-			w1 := ((x2-fx)*(y0-fy) - (y2-fy)*(x0-fx)) * invArea
-			w2 := 1.0 - w0 - w1
-			if w0 < -1e-5 || w1 < -1e-5 || w2 < -1e-5 {
-				continue
-			}
-
-			depth := w0*z0 + w1*z1 + w2*z2
-			if depth < 0 || depth > 1 {
-				continue
-			}
-
-			pixIdx := py*c.targetW + px
-			if ds != nil && c.depthPix != nil {
-				if !compareDepth(ds.DepthCompare, depth, c.depthPix[pixIdx]) {
+			coveredCount := 0
+			var centX, centY float32
+			for s := 0; s < sampleCount; s++ {
+				sx := float32(px) + sampleOffsets[s][0]
+				sy := float32(py) + sampleOffsets[s][1]
+				w0, w1, w2 := baryAt(sx, sy)
+				if w0 < -1e-5 || w1 < -1e-5 || w2 < -1e-5 {
+					sampleCovered[s] = false
 					continue
 				}
+				z := w0*z0 + w1*z1 + w2*z2
+				if hasDepthBias {
+					z = clamp01(z + depthBias)
+				}
+				if z < 0 || z > 1 {
+					sampleCovered[s] = false
+					continue
+				}
+				sampleCovered[s] = true
+				sampleDepth[s] = z
+				coveredCount++
+				centX += sx
+				centY += sy
+			}
+			if coveredCount == 0 {
+				continue
+			}
+
+			// Evaluate fragment shader at pixel center (or centroid of covered samples if center is outside).
+			fx := float32(px) + 0.5
+			fy := float32(py) + 0.5
+			w0, w1, w2 := baryAt(fx, fy)
+			if w0 < -1e-5 || w1 < -1e-5 || w2 < -1e-5 {
+				fx = centX / float32(coveredCount)
+				fy = centY / float32(coveredCount)
+				w0, w1, w2 = baryAt(fx, fy)
+			}
+			centerDepth := w0*z0 + w1*z1 + w2*z2
+			if hasDepthBias {
+				centerDepth = clamp01(centerDepth + depthBias)
 			}
 
 			// Perspective-correct interpolation weights.
 			pw0, pw1, pw2 := w0*invW0, w1*invW1, w2*invW2
-			invSum := 1.0 / (pw0 + pw1 + pw2)
+			invSum := float32(1.0) / (pw0 + pw1 + pw2)
 			for vi := range nv {
 				flat := vi < len(c.prog.VaryingMeta) && c.prog.VaryingMeta[vi].Interpolation == shaderir.InterpFlat
 				if flat {
@@ -801,43 +1174,93 @@ func (c *softDrawCtx) rasterTriangle(v0, v1, v2 shadedVertex) {
 				}
 			}
 
-			color, discarded := c.runFragment([4]float32{fx, fy, depth, invSum}, interpVaryings, frontFacing)
+			fragOuts, discarded := c.runFragment([4]float32{fx, fy, centerDepth, invSum}, interpVaryings, frontFacing)
 			if discarded {
 				continue
 			}
 
-			if ds != nil && ds.DepthWrite && c.depthPix != nil {
-				c.depthPix[pixIdx] = depth
-			}
+			pixIdx := py*c.targetW + px
+			for s := 0; s < sampleCount; s++ {
+				if !sampleCovered[s] {
+					continue
+				}
+				sampIdx := pixIdx*sampleCount + s
+				z := sampleDepth[s]
 
-			if c.colorPix != nil {
-				off := pixIdx * 4
-				sr, sg, sb, sa := clamp01(color[0]), clamp01(color[1]), clamp01(color[2]), clamp01(color[3])
-				var writeMask GPUColorWriteMask = GPUColorWriteAll
-				if len(c.pipe.desc.Targets) > 0 {
-					t0 := c.pipe.desc.Targets[0]
-					if t0.WriteMask != 0 {
-						writeMask = t0.WriteMask
-					}
-					if t0.Blend != nil {
-						dr := float32(c.colorPix[off+0]) / 255.0
-						dg := float32(c.colorPix[off+1]) / 255.0
-						db := float32(c.colorPix[off+2]) / 255.0
-						da := float32(c.colorPix[off+3]) / 255.0
-						sr, sg, sb, sa = applyBlend(t0.Blend, [4]float32{sr, sg, sb, sa}, [4]float32{dr, dg, db, da}, c.blendConst)
+				// Stencil test (per WebGPU spec: compare(ref & readMask, buf & readMask)).
+				if hasStencilTest {
+					cur := c.stencilPix[sampIdx]
+					if !compareStencil(stencilFace.Compare, c.stencilRef&stencilReadMask, cur&stencilReadMask) {
+						next := applyStencilOp(stencilFace.FailOp, cur, c.stencilRef)
+						c.stencilPix[sampIdx] = (cur &^ stencilWriteMask) | (next & stencilWriteMask)
+						continue
 					}
 				}
-				if writeMask&GPUColorWriteRed != 0 {
-					c.colorPix[off+0] = floatToByte(sr)
+
+				// Depth test.
+				if hasDepthTest {
+					if !compareDepth(ds.DepthCompare, z, c.depthPix[sampIdx]) {
+						if hasStencilTest {
+							cur := c.stencilPix[sampIdx]
+							next := applyStencilOp(stencilFace.DepthFailOp, cur, c.stencilRef)
+							c.stencilPix[sampIdx] = (cur &^ stencilWriteMask) | (next & stencilWriteMask)
+						}
+						continue
+					}
 				}
-				if writeMask&GPUColorWriteGreen != 0 {
-					c.colorPix[off+1] = floatToByte(sg)
+
+				// Both stencil and depth passed.
+				if hasStencilTest {
+					cur := c.stencilPix[sampIdx]
+					next := applyStencilOp(stencilFace.PassOp, cur, c.stencilRef)
+					c.stencilPix[sampIdx] = (cur &^ stencilWriteMask) | (next & stencilWriteMask)
 				}
-				if writeMask&GPUColorWriteBlue != 0 {
-					c.colorPix[off+2] = floatToByte(sb)
+				if hasDepthTest && ds.DepthWrite {
+					c.depthPix[sampIdx] = z
 				}
-				if writeMask&GPUColorWriteAlpha != 0 {
-					c.colorPix[off+3] = floatToByte(sa)
+
+				// Write all MRT color attachments for this sample.
+				for ti := range c.colorTargets {
+					ct := &c.colorTargets[ti]
+					if ct.color == nil || ti >= maxSoftColorAttachments {
+						continue
+					}
+					var writeMask GPUColorWriteMask = GPUColorWriteAll
+					var blend *GPUBlendState
+					if ti < len(c.pipe.desc.Targets) {
+						ts := c.pipe.desc.Targets[ti]
+						if ts.WriteMask != 0 {
+							writeMask = ts.WriteMask
+						}
+						blend = ts.Blend
+					}
+					if writeMask == GPUColorWriteNone {
+						continue
+					}
+					src := fragOuts[ti]
+					isFloat := ct.format.IsFloat()
+					if !isFloat {
+						src = [4]float32{clamp01(src[0]), clamp01(src[1]), clamp01(src[2]), clamp01(src[3])}
+					}
+					off := sampIdx * 4
+					if blend != nil {
+						dst := [4]float32{ct.color[off+0], ct.color[off+1], ct.color[off+2], ct.color[off+3]}
+						r, g, b, a := applyBlend(blend, src, dst, c.blendConst, !isFloat)
+						src = [4]float32{r, g, b, a}
+					}
+					q := quantizeColorForFormat(ct.format, src)
+					if writeMask&GPUColorWriteRed != 0 {
+						ct.color[off+0] = q[0]
+					}
+					if writeMask&GPUColorWriteGreen != 0 {
+						ct.color[off+1] = q[1]
+					}
+					if writeMask&GPUColorWriteBlue != 0 {
+						ct.color[off+2] = q[2]
+					}
+					if writeMask&GPUColorWriteAlpha != 0 {
+						ct.color[off+3] = q[3]
+					}
 				}
 			}
 		}
@@ -864,6 +1287,56 @@ func compareDepth(fn GPUCompareFunc, src, dst float32) bool {
 		return true
 	default:
 		return src < dst
+	}
+}
+
+func compareStencil(fn GPUCompareFunc, ref, buf uint8) bool {
+	switch fn {
+	case GPUCompareNever:
+		return false
+	case GPUCompareLess:
+		return ref < buf
+	case GPUCompareEqual:
+		return ref == buf
+	case GPUCompareLessEqual:
+		return ref <= buf
+	case GPUCompareGreater:
+		return ref > buf
+	case GPUCompareNotEqual:
+		return ref != buf
+	case GPUCompareGreaterEqual:
+		return ref >= buf
+	case GPUCompareAlways, GPUCompareUndefined:
+		return true
+	default:
+		return true
+	}
+}
+
+func applyStencilOp(op GPUStencilOperation, cur, ref uint8) uint8 {
+	switch op {
+	case GPUStencilZero:
+		return 0
+	case GPUStencilReplace:
+		return ref
+	case GPUStencilInvert:
+		return ^cur
+	case GPUStencilIncrementClamp:
+		if cur < 255 {
+			return cur + 1
+		}
+		return 255
+	case GPUStencilDecrementClamp:
+		if cur > 0 {
+			return cur - 1
+		}
+		return 0
+	case GPUStencilIncrementWrap:
+		return cur + 1
+	case GPUStencilDecrementWrap:
+		return cur - 1
+	default: // GPUStencilKeep
+		return cur
 	}
 }
 
@@ -900,31 +1373,329 @@ func blendFactorVal(f GPUBlendFactor, src, dst, c [4]float32) [4]float32 {
 	}
 }
 
-func blendCombine(op GPUBlendOperation, s, d float32) float32 {
+func blendCombine(op GPUBlendOperation, s, d float32, clamp bool) float32 {
+	var out float32
 	switch op {
 	case GPUBlendSubtract:
-		return clamp01(s - d)
+		out = s - d
 	case GPUBlendReverseSubtract:
-		return clamp01(d - s)
+		out = d - s
 	case GPUBlendMin:
-		return clamp01(min(s, d))
+		out = min(s, d)
 	case GPUBlendMax:
-		return clamp01(max(s, d))
+		out = max(s, d)
 	default:
-		return clamp01(s + d)
+		out = s + d
+	}
+	if clamp {
+		return clamp01(out)
+	}
+	return out
+}
+
+func applyBlend(bs *GPUBlendState, src, dst, c [4]float32, clamp bool) (float32, float32, float32, float32) {
+	if bs.Color.Operation == GPUBlendMin || bs.Color.Operation == GPUBlendMax {
+		r := blendCombine(bs.Color.Operation, src[0], dst[0], clamp)
+		g := blendCombine(bs.Color.Operation, src[1], dst[1], clamp)
+		b := blendCombine(bs.Color.Operation, src[2], dst[2], clamp)
+		var a float32
+		if bs.Alpha.Operation == GPUBlendMin || bs.Alpha.Operation == GPUBlendMax {
+			a = blendCombine(bs.Alpha.Operation, src[3], dst[3], clamp)
+		} else {
+			as := blendFactorVal(bs.Alpha.SrcFactor, src, dst, c)
+			ad := blendFactorVal(bs.Alpha.DstFactor, src, dst, c)
+			a = blendCombine(bs.Alpha.Operation, src[3]*as[3], dst[3]*ad[3], clamp)
+		}
+		return r, g, b, a
+	}
+	cs := blendFactorVal(bs.Color.SrcFactor, src, dst, c)
+	cd := blendFactorVal(bs.Color.DstFactor, src, dst, c)
+	r := blendCombine(bs.Color.Operation, src[0]*cs[0], dst[0]*cd[0], clamp)
+	g := blendCombine(bs.Color.Operation, src[1]*cs[1], dst[1]*cd[1], clamp)
+	b := blendCombine(bs.Color.Operation, src[2]*cs[2], dst[2]*cd[2], clamp)
+	var a float32
+	if bs.Alpha.Operation == GPUBlendMin || bs.Alpha.Operation == GPUBlendMax {
+		a = blendCombine(bs.Alpha.Operation, src[3], dst[3], clamp)
+	} else {
+		as := blendFactorVal(bs.Alpha.SrcFactor, src, dst, c)
+		ad := blendFactorVal(bs.Alpha.DstFactor, src, dst, c)
+		a = blendCombine(bs.Alpha.Operation, src[3]*as[3], dst[3]*ad[3], clamp)
+	}
+	return r, g, b, a
+}
+
+// --- Format quantization, sRGB, float16, and RG11B10F conversion ---
+
+func srgbToLinear(c float32) float32 {
+	c = clamp01(c)
+	if c <= 0.04045 {
+		return c / 12.92
+	}
+	return float32(math.Pow(float64((c+0.055)/1.055), 2.4))
+}
+
+func linearToSRGB(c float32) float32 {
+	c = clamp01(c)
+	if c <= 0.0031308 {
+		return c * 12.92
+	}
+	return float32(1.055*math.Pow(float64(c), 1.0/2.4) - 0.055)
+}
+
+func float32ToFloat16(f float32) uint16 {
+	bits := math.Float32bits(f)
+	sign := uint16((bits >> 16) & 0x8000)
+	exp := int((bits>>23)&0xFF) - 127 + 15
+	mant := bits & 0x007FFFFF
+
+	if exp <= 0 {
+		if exp < -10 {
+			return sign
+		}
+		mant |= 0x00800000
+		shift := uint(14 - exp)
+		half := uint16(mant >> shift)
+		// Round to nearest even
+		roundBit := uint32(1) << (shift - 1)
+		if (mant&roundBit) != 0 && ((mant&(roundBit-1)) != 0 || (half&1) != 0) {
+			half++
+		}
+		return sign | half
+	}
+	if exp >= 31 {
+		if ((bits>>23)&0xFF) == 0xFF && mant != 0 {
+			return sign | 0x7E00 // NaN
+		}
+		return sign | 0x7C00 // Inf
+	}
+	half := uint16((exp << 10) | int(mant>>13))
+	if (mant&0x1000) != 0 && ((mant&0x0FFF) != 0 || (half&1) != 0) {
+		half++
+	}
+	return sign | half
+}
+
+func float16ToFloat32(h uint16) float32 {
+	sign := uint32(h&0x8000) << 16
+	exp := uint32((h >> 10) & 0x1F)
+	mant := uint32(h & 0x03FF)
+	switch exp {
+	case 0:
+		if mant == 0 {
+			return math.Float32frombits(sign)
+		}
+		// Subnormal
+		e := uint32(127 - 14)
+		for (mant & 0x0400) == 0 {
+			mant <<= 1
+			e--
+		}
+		mant &= 0x03FF
+		return math.Float32frombits(sign | (e << 23) | (mant << 13))
+	case 31:
+		if mant == 0 {
+			return math.Float32frombits(sign | 0x7F800000)
+		}
+		return math.Float32frombits(sign | 0x7FC00000 | (mant << 13))
+	default:
+		return math.Float32frombits(sign | ((exp + (127 - 15)) << 23) | (mant << 13))
 	}
 }
 
-func applyBlend(bs *GPUBlendState, src, dst, c [4]float32) (float32, float32, float32, float32) {
-	cs := blendFactorVal(bs.Color.SrcFactor, src, dst, c)
-	cd := blendFactorVal(bs.Color.DstFactor, src, dst, c)
-	as := blendFactorVal(bs.Alpha.SrcFactor, src, dst, c)
-	ad := blendFactorVal(bs.Alpha.DstFactor, src, dst, c)
-	r := blendCombine(bs.Color.Operation, src[0]*cs[0], dst[0]*cd[0])
-	g := blendCombine(bs.Color.Operation, src[1]*cs[1], dst[1]*cd[1])
-	b := blendCombine(bs.Color.Operation, src[2]*cs[2], dst[2]*cd[2])
-	a := blendCombine(bs.Alpha.Operation, src[3]*as[3], dst[3]*ad[3])
-	return r, g, b, a
+func encodeUnsignedFloat(f float32, mantBits uint) uint32 {
+	if math.IsNaN(float64(f)) || f <= 0 {
+		return 0
+	}
+	bits := math.Float32bits(f)
+	exp := int((bits>>23)&0xFF) - 127 + 15
+	mant := bits & 0x007FFFFF
+	maxVal := uint32((30 << mantBits) | ((1 << mantBits) - 1))
+	if exp <= 0 {
+		if exp < -int(mantBits) {
+			return 0
+		}
+		mant |= 0x00800000
+		shift := uint(24-mantBits) - uint(exp)
+		return mant >> shift
+	}
+	if exp >= 31 {
+		return maxVal
+	}
+	shift := uint(23 - mantBits)
+	out := uint32(exp<<mantBits) | (mant >> shift)
+	if shift > 0 && (mant&(1<<(shift-1))) != 0 {
+		if out < maxVal {
+			out++
+		}
+	}
+	return out
+}
+
+func decodeUnsignedFloat(v uint32, mantBits uint) float32 {
+	exp := (v >> mantBits) & 0x1F
+	mant := v & ((1 << mantBits) - 1)
+	if exp == 0 {
+		if mant == 0 {
+			return 0
+		}
+		return float32(mant) * float32(math.Ldexp(1, -14-int(mantBits)))
+	}
+	if exp == 31 {
+		if mant == 0 {
+			return float32(math.Inf(1))
+		}
+		return float32(math.NaN())
+	}
+	return float32(math.Ldexp(1.0+float64(mant)/float64(uint32(1)<<mantBits), int(exp)-15))
+}
+
+func packRG11B10F(r, g, b float32) uint32 {
+	ru := encodeUnsignedFloat(r, 6) & 0x7FF
+	gu := encodeUnsignedFloat(g, 6) & 0x7FF
+	bu := encodeUnsignedFloat(b, 5) & 0x3FF
+	return ru | (gu << 11) | (bu << 22)
+}
+
+func unpackRG11B10F(v uint32) (r, g, b float32) {
+	r = decodeUnsignedFloat(v&0x7FF, 6)
+	g = decodeUnsignedFloat((v>>11)&0x7FF, 6)
+	b = decodeUnsignedFloat((v>>22)&0x3FF, 5)
+	return
+}
+
+func quantizeColorForFormat(format GPUTextureFormat, c [4]float32) [4]float32 {
+	switch format {
+	case GPUFormatRGBA8UnormSRGB, GPUFormatBGRA8UnormSRGB:
+		return [4]float32{
+			srgbToLinear(float32(floatToByte(linearToSRGB(c[0]))) / 255.0),
+			srgbToLinear(float32(floatToByte(linearToSRGB(c[1]))) / 255.0),
+			srgbToLinear(float32(floatToByte(linearToSRGB(c[2]))) / 255.0),
+			float32(floatToByte(c[3])) / 255.0,
+		}
+	case GPUFormatR8Unorm:
+		return [4]float32{float32(floatToByte(c[0])) / 255.0, 0, 0, 1}
+	case GPUFormatRG8Unorm:
+		return [4]float32{float32(floatToByte(c[0])) / 255.0, float32(floatToByte(c[1])) / 255.0, 0, 1}
+	case GPUFormatRGBA16Float:
+		return [4]float32{
+			float16ToFloat32(float32ToFloat16(c[0])),
+			float16ToFloat32(float32ToFloat16(c[1])),
+			float16ToFloat32(float32ToFloat16(c[2])),
+			float16ToFloat32(float32ToFloat16(c[3])),
+		}
+	case GPUFormatRG11B10Float:
+		r, g, b := unpackRG11B10F(packRG11B10F(c[0], c[1], c[2]))
+		return [4]float32{r, g, b, 1}
+	case GPUFormatR32Float:
+		return [4]float32{c[0], 0, 0, 1}
+	case GPUFormatRGBA32Float:
+		return c
+	default: // RGBA8Unorm, BGRA8Unorm
+		return [4]float32{
+			float32(floatToByte(c[0])) / 255.0,
+			float32(floatToByte(c[1])) / 255.0,
+			float32(floatToByte(c[2])) / 255.0,
+			float32(floatToByte(c[3])) / 255.0,
+		}
+	}
+}
+
+func decodePixelBytes(src []byte, format GPUTextureFormat) [4]float32 {
+	switch format {
+	case GPUFormatRGBA8UnormSRGB:
+		return [4]float32{
+			srgbToLinear(float32(src[0]) / 255.0),
+			srgbToLinear(float32(src[1]) / 255.0),
+			srgbToLinear(float32(src[2]) / 255.0),
+			float32(src[3]) / 255.0,
+		}
+	case GPUFormatBGRA8Unorm:
+		return [4]float32{
+			float32(src[2]) / 255.0,
+			float32(src[1]) / 255.0,
+			float32(src[0]) / 255.0,
+			float32(src[3]) / 255.0,
+		}
+	case GPUFormatBGRA8UnormSRGB:
+		return [4]float32{
+			srgbToLinear(float32(src[2]) / 255.0),
+			srgbToLinear(float32(src[1]) / 255.0),
+			srgbToLinear(float32(src[0]) / 255.0),
+			float32(src[3]) / 255.0,
+		}
+	case GPUFormatR8Unorm:
+		return [4]float32{float32(src[0]) / 255.0, 0, 0, 1}
+	case GPUFormatRG8Unorm:
+		return [4]float32{float32(src[0]) / 255.0, float32(src[1]) / 255.0, 0, 1}
+	case GPUFormatRGBA16Float:
+		return [4]float32{
+			float16ToFloat32(binary.LittleEndian.Uint16(src[0:2])),
+			float16ToFloat32(binary.LittleEndian.Uint16(src[2:4])),
+			float16ToFloat32(binary.LittleEndian.Uint16(src[4:6])),
+			float16ToFloat32(binary.LittleEndian.Uint16(src[6:8])),
+		}
+	case GPUFormatRG11B10Float:
+		r, g, b := unpackRG11B10F(binary.LittleEndian.Uint32(src[0:4]))
+		return [4]float32{r, g, b, 1}
+	case GPUFormatR32Float:
+		return [4]float32{math.Float32frombits(binary.LittleEndian.Uint32(src[0:4])), 0, 0, 1}
+	case GPUFormatRGBA32Float:
+		return [4]float32{
+			math.Float32frombits(binary.LittleEndian.Uint32(src[0:4])),
+			math.Float32frombits(binary.LittleEndian.Uint32(src[4:8])),
+			math.Float32frombits(binary.LittleEndian.Uint32(src[8:12])),
+			math.Float32frombits(binary.LittleEndian.Uint32(src[12:16])),
+		}
+	default:
+		return [4]float32{
+			float32(src[0]) / 255.0,
+			float32(src[1]) / 255.0,
+			float32(src[2]) / 255.0,
+			float32(src[3]) / 255.0,
+		}
+	}
+}
+
+func readbackBytesPerPixel(format GPUTextureFormat) int {
+	switch format {
+	case GPUFormatRGBA16Float:
+		return 8
+	case GPUFormatRG11B10Float, GPUFormatR32Float:
+		return 4
+	case GPUFormatRGBA32Float:
+		return 16
+	default:
+		return 4
+	}
+}
+
+func encodePixelBytes(dst []byte, format GPUTextureFormat, c [4]float32) {
+	switch format {
+	case GPUFormatRGBA8UnormSRGB, GPUFormatBGRA8UnormSRGB:
+		dst[0] = floatToByte(linearToSRGB(c[0]))
+		dst[1] = floatToByte(linearToSRGB(c[1]))
+		dst[2] = floatToByte(linearToSRGB(c[2]))
+		dst[3] = floatToByte(c[3])
+	case GPUFormatRGBA16Float:
+		binary.LittleEndian.PutUint16(dst[0:2], float32ToFloat16(c[0]))
+		binary.LittleEndian.PutUint16(dst[2:4], float32ToFloat16(c[1]))
+		binary.LittleEndian.PutUint16(dst[4:6], float32ToFloat16(c[2]))
+		binary.LittleEndian.PutUint16(dst[6:8], float32ToFloat16(c[3]))
+	case GPUFormatRG11B10Float:
+		binary.LittleEndian.PutUint32(dst[0:4], packRG11B10F(c[0], c[1], c[2]))
+	case GPUFormatR32Float:
+		binary.LittleEndian.PutUint32(dst[0:4], math.Float32bits(c[0]))
+	case GPUFormatRGBA32Float:
+		binary.LittleEndian.PutUint32(dst[0:4], math.Float32bits(c[0]))
+		binary.LittleEndian.PutUint32(dst[4:8], math.Float32bits(c[1]))
+		binary.LittleEndian.PutUint32(dst[8:12], math.Float32bits(c[2]))
+		binary.LittleEndian.PutUint32(dst[12:16], math.Float32bits(c[3]))
+	default:
+		dst[0] = floatToByte(c[0])
+		dst[1] = floatToByte(c[1])
+		dst[2] = floatToByte(c[2])
+		dst[3] = floatToByte(c[3])
+	}
 }
 
 // --- Pure-Go shaderir Interpreter ---
@@ -1587,7 +2358,11 @@ func (vm *irVM) evalCall(e shaderir.Expr) irVal {
 	case shaderir.TextureSample, shaderir.TextureSampleLevel, shaderir.TextureSampleBias:
 		return vm.evalTextureSample(e.Exprs[1].Index, e.Exprs[2].Index, vm.evalExpr(e.Exprs[3]))
 	case shaderir.TextureLoad:
-		return vm.evalTextureLoad(e.Exprs[1].Index, vm.evalExpr(e.Exprs[2]))
+		var extra irVal
+		if len(e.Exprs) > 3 {
+			extra = vm.evalExpr(e.Exprs[3])
+		}
+		return vm.evalTextureLoad(e.Exprs[1].Index, vm.evalExpr(e.Exprs[2]), extra)
 	case shaderir.TextureDimensions:
 		return vm.evalTextureDimensions(e.Exprs[1].Index)
 	}
@@ -1760,7 +2535,7 @@ func wrapCoord(u float32, mode GPUAddressMode) float32 {
 
 func (vm *irVM) evalTextureSample(texIdx, sampIdx int, uv irVal) irVal {
 	tex := vm.lookupTexture(texIdx)
-	if tex == nil || tex.rgba == nil {
+	if tex == nil || tex.color == nil {
 		return irVal{typ: shaderir.Type{Main: shaderir.Vec4}, f: [16]float32{0, 0, 0, 1}}
 	}
 	var desc GPUSamplerDesc
@@ -1770,16 +2545,17 @@ func (vm *irVM) evalTextureSample(texIdx, sampIdx int, uv irVal) irVal {
 	w, h := int(tex.desc.Width), int(tex.desc.Height)
 	u := wrapCoord(uv.f[0], desc.AddressU)
 	v := wrapCoord(uv.f[1], desc.AddressV)
+	samples := max(tex.samples, 1)
 
 	readPx := func(x, y int) [4]float32 {
 		x = min(max(x, 0), w-1)
 		y = min(max(y, 0), h-1)
-		off := (y*w + x) * 4
+		off := (y*w + x) * samples * 4
 		return [4]float32{
-			float32(tex.rgba[off+0]) / 255.0,
-			float32(tex.rgba[off+1]) / 255.0,
-			float32(tex.rgba[off+2]) / 255.0,
-			float32(tex.rgba[off+3]) / 255.0,
+			tex.color[off+0],
+			tex.color[off+1],
+			tex.color[off+2],
+			tex.color[off+3],
 		}
 	}
 
@@ -1809,20 +2585,29 @@ func (vm *irVM) evalTextureSample(texIdx, sampIdx int, uv irVal) irVal {
 	return irVal{typ: shaderir.Type{Main: shaderir.Vec4}, f: [16]float32{c[0], c[1], c[2], c[3]}}
 }
 
-func (vm *irVM) evalTextureLoad(texIdx int, coord irVal) irVal {
+func (vm *irVM) evalTextureLoad(texIdx int, coord, extra irVal) irVal {
 	tex := vm.lookupTexture(texIdx)
-	if tex == nil || tex.rgba == nil {
+	if tex == nil || tex.color == nil {
 		return irVal{typ: shaderir.Type{Main: shaderir.Vec4}, f: [16]float32{0, 0, 0, 1}}
 	}
 	w, h := int(tex.desc.Width), int(tex.desc.Height)
 	ix := min(max(int(coord.i[0]), 0), w-1)
 	iy := min(max(int(coord.i[1]), 0), h-1)
-	off := (iy*w + ix) * 4
+	samples := max(tex.samples, 1)
+	samp := 0
+	if samples > 1 {
+		samp = int(extra.i[0])
+		if extra.typ.Main == shaderir.Uint {
+			samp = int(extra.u[0])
+		}
+		samp = min(max(samp, 0), samples-1)
+	}
+	off := ((iy*w+ix)*samples + samp) * 4
 	return irVal{typ: shaderir.Type{Main: shaderir.Vec4}, f: [16]float32{
-		float32(tex.rgba[off+0]) / 255.0,
-		float32(tex.rgba[off+1]) / 255.0,
-		float32(tex.rgba[off+2]) / 255.0,
-		float32(tex.rgba[off+3]) / 255.0,
+		tex.color[off+0],
+		tex.color[off+1],
+		tex.color[off+2],
+		tex.color[off+3],
 	}}
 }
 
