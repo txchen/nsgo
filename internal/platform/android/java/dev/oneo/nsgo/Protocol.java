@@ -25,37 +25,119 @@ final class Protocol {
         }
     }
 
-    /** Reads Go's next message, or null at a clean end of the pipe. */
+    static final int BULK_CHUNK = 32 * 1024;
+    static final int BULK_HEADER = 9;
+
+    /** Holds an image, font or mount batch while unrelated wire messages pass its fragments. */
+    static final class BulkReader {
+        private int kind;
+        private byte[] data;
+        private int received;
+
+        void end() throws IOException {
+            if (data != null) throw invalidMessage("incomplete bulk message");
+        }
+
+        Message read(DataInputStream in, int length) throws IOException {
+            if (length <= BULK_HEADER || length > BULK_HEADER + BULK_CHUNK) {
+                throw invalidMessage("invalid bulk fragment length");
+            }
+            int next, size, offset;
+            try {
+                next = in.readUnsignedByte();
+                size = in.readInt();
+                offset = in.readInt();
+            } catch (EOFException e) {
+                throw invalidMessage("incomplete bulk fragment header");
+            }
+            length -= BULK_HEADER;
+            if (next != IMAGE && next != CANVAS_IMAGE && next != FONT_DATA && next != PIXEL_FRAME && next != BATCH) {
+                throw invalidMessage("unexpected bulk message kind " + next);
+            }
+            if (size <= BULK_CHUNK || size > MAX_MESSAGE_SIZE || offset < 0 || offset > size - length) {
+                throw invalidMessage("invalid bulk message size or offset");
+            }
+            if (data == null && offset == 0) {
+                kind = next;
+                data = new byte[size];
+            }
+            if (data == null || next != kind || size != data.length || offset != received) {
+                throw invalidMessage("out-of-order bulk fragment");
+            }
+            // Read directly into the completed message's storage. Pixel
+            // frames take this path on every animation frame.
+            try {
+                in.readFully(data, offset, length);
+            } catch (EOFException e) {
+                throw invalidMessage("incomplete bulk fragment payload");
+            }
+            received += length;
+            if (received < size) return null;
+            Message complete = new Message(kind, data);
+            data = null;
+            received = 0;
+            return complete;
+        }
+    }
+
+    /** Reads Go's next wire frame, or null at a clean end of the pipe. */
     static Message readMessage(DataInputStream in) throws IOException {
-        int kind = in.read();
-        if (kind == -1) return null;
-        if (kind < BATCH || kind > EXTENDED) throw invalidMessage("unexpected message kind " + kind);
-        int length;
-        try {
-            length = in.readInt();
-        } catch (EOFException e) {
-            throw invalidMessage("incomplete message header");
+        return readMessage(in, null);
+    }
+
+    /** Delivers a completed transfer or any ordinary messages that pass it. */
+    static Message readMessage(DataInputStream in, BulkReader bulk) throws IOException {
+        for (;;) {
+            int kind = in.read();
+            if (kind == -1) return null;
+
+            if (kind < BATCH || kind > EXTENDED) throw invalidMessage("unexpected message kind " + kind);
+
+            int length;
+            try {
+                length = in.readInt();
+            } catch (EOFException e) {
+                throw invalidMessage("incomplete message header");
+            }
+            if (length < 0 || length > MAX_MESSAGE_SIZE) {
+                throw invalidMessage("message length " + Integer.toUnsignedLong(length) + " exceeds " + MAX_MESSAGE_SIZE + " bytes");
+            }
+            int extended = -1;
+            if (kind == EXTENDED) {
+                if (length == 0) throw invalidMessage("extended message without its kind");
+                try {
+                    extended = in.readUnsignedByte();
+                } catch (EOFException e) {
+                    throw invalidMessage("incomplete message payload (expected " + length + " bytes)");
+                }
+                if (!isExtended(extended)) throw invalidMessage("unexpected extended message kind " + extended);
+                // A bulk fragment is read straight into the transfer's storage; an empty EXT_BULK is the hello NsgoView answers.
+                if (extended == EXT_BULK && length > 1 && bulk != null) {
+                    Message message = bulk.read(in, length - 1);
+                    if (message == null) continue;
+                    return message;
+                }
+            }
+            byte[] payload = new byte[length];
+            int start = 0;
+            if (extended >= 0) {
+                payload[0] = (byte) extended;
+                start = 1;
+            }
+            try {
+                in.readFully(payload, start, length - start);
+            } catch (EOFException e) {
+                throw invalidMessage("incomplete message payload (expected " + length + " bytes)");
+            }
+            return new Message(kind, payload);
         }
-        if (length < 0 || length > MAX_MESSAGE_SIZE) {
-            throw invalidMessage("message length " + Integer.toUnsignedLong(length) + " exceeds " + MAX_MESSAGE_SIZE + " bytes");
-        }
-        byte[] payload = new byte[length];
-        try {
-            in.readFully(payload);
-        } catch (EOFException e) {
-            throw invalidMessage("incomplete message payload (expected " + length + " bytes)");
-        }
-        if (kind == EXTENDED) {
-            if (length == 0) throw invalidMessage("extended message without its kind");
-            int extended = payload[0] & 0xff;
-            if (!isExtended(extended)) throw invalidMessage("unexpected extended message kind " + extended);
-        }
-        return new Message(kind, payload);
     }
 
     /** Whether Go writes extended messages of this kind: each EXT_* constant has its case. */
     static boolean isExtended(int kind) {
         switch (kind) {
+            case EXT_BULK:
+                return true;
             default:
                 return false;
         }
@@ -111,6 +193,8 @@ final class Protocol {
     static final int CAP_EXTENDED_MESSAGES = 1;
 
     // Extended kinds, the first byte of an EXTENDED message, kept in sync with android.go's ext* constants: each is EXT_NAME = n with n from 1 up, and has its case in isExtended.
+    /** An empty hello, or one fragment of a bulk message: its kind, total size, offset and bytes (bulk.go, BulkReader). */
+    static final int EXT_BULK = 4;
 
 
     // Java to Go.
@@ -154,6 +238,9 @@ final class Protocol {
 
     /** Answers DISK_SPACE with its surface and count, an error ("" for none), total and allocatable bytes. */
     static final int DISK_SPACE_REPLY = 25;
+
+    /** An empty capability acknowledgement, or a bulk reply fragment. */
+    static final int BULK_REPLY = 26;
 
     /** Answers TEXT_REQUEST with its request ID, its operation, and the reply bytes or an error. */
     static final int TEXT_REPLY = 27;

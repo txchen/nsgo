@@ -129,6 +129,7 @@ const (
 	msgGamepad = 24
 	// msgDiskSpaceReply answers msgDiskSpace, with byte counts or the reason it failed.
 	msgDiskSpaceReply = 25
+	msgBulkReply      = 26 // empty acknowledgement or one fragment of a bulk reply
 	msgTextReply      = 27
 	msgPerfFrame      = 28 // a monitored Choreographer frame and UI work since the previous frame
 	// msgPhysicalKey reports a hardware key and its scan code (keycodes.go).
@@ -136,7 +137,10 @@ const (
 )
 
 // Extended Go-to-Java message kinds, the sub-kind byte of a msgExtended message, kept in sync with Protocol.java's EXT_* constants (TestJavaExtendedKindsMatchGo). Each is extName = n, with n from 1 up: 0 is never a kind, so a msgExtended message whose sub-kind was left out is refused rather than read as one.
-const ()
+const (
+	// extBulk is an empty hello, or one fragment of a bulk message, bulk.go's. Go sends the hello once the environment says the runtime reads extended messages and keeps the single-frame path until the runtime answers it with msgBulkReply.
+	extBulk = 4
+)
 
 // The parts of an image view's request msgImage carries.
 const (
@@ -147,14 +151,19 @@ const (
 type surface struct {
 	sensorReports sensorReports
 
-	mu      sync.Mutex // guards out and buf
-	out     *os.File
-	buf     []byte
-	ids     atomic.Uint32 // the last prepared text or layout id
-	textRPC *textRPC
-	engine  *engine.Engine
-	started chan struct{}      // closed once engine is set
-	env     driver.Environment // the last reported, on the reader goroutine
+	mu        sync.Mutex // guards out and buf
+	mountMu   sync.Mutex // keeps a batch and its pixel frames together
+	bulk      bulkWriter
+	bulkReady atomic.Bool
+	// bulkHello is set once Go has sent the extBulk hello.
+	bulkHello atomic.Bool
+	out       *os.File
+	buf       []byte
+	ids       atomic.Uint32 // the last prepared text or layout id
+	textRPC   *textRPC
+	engine    *engine.Engine
+	started   chan struct{}      // closed once engine is set
+	env       driver.Environment // the last reported, on the reader goroutine
 	// omu guards overlays, the overlays over other apps the app opened, by their surface IDs (overlay.go).
 	omu      sync.Mutex
 	overlays map[uint32]*overlay
@@ -246,6 +255,8 @@ func connect(opts Options) *surface {
 		host:       newEmbedHost(),
 	}
 	s.textRPC = newTextRPC(func(payload []byte, deadline time.Time) error {
+		s.bulk.priority.Lock()
+		defer s.bulk.priority.Unlock()
 		return s.sendBefore(msgTextRequest, deadline, func(w *writer) { w.buf = append(w.buf, payload...) })
 	})
 	useDNS()
@@ -283,8 +294,22 @@ func connect(opts Options) *surface {
 // test starts the engine.
 func (s *surface) serve(app engine.App, opts Options, test *testOpen) {
 	in := bufio.NewReader(os.Stdin)
+	bulk := bulkReader{accept: func(kind byte) bool { return kind == msgFolderReply || kind == msgFetched }}
 	for {
 		kind, payload, err := readMessage(in)
+		if err == nil && kind == msgBulkReply {
+			if len(payload) == 0 {
+				s.bulkReady.Store(true)
+				continue
+			}
+			kind, payload, err = bulk.add(payload)
+			if err != nil {
+				log.Print("nsgo: Android runtime pipe: ", err)
+			}
+			if err == nil && payload == nil {
+				continue
+			}
+		}
 		if err != nil {
 			// The runtime is gone, and the app with it.
 			s.textRPC.close()
@@ -401,6 +426,10 @@ func (s *surface) serve(app engine.App, opts Options, test *testOpen) {
 		case msgEnvironment:
 			env, third := readEnvironmentCapabilities(&r)
 			s.extendedMessages.Store(third&capExtendedMessages != 0)
+			// The bulk hello waits for the first environment, which says whether the runtime reads extended messages: one that does not keeps both sides on complete messages (errNoExtendedMessages).
+			if s.extendedMessages.Load() && s.bulkHello.CompareAndSwap(false, true) {
+				_ = s.sendExtended(extBulk, func(*writer) {})
+			}
 			if env.Equal(s.env) {
 				break
 			}
@@ -1275,7 +1304,7 @@ func (s *surface) report(l imageLoad, ev driver.Event) {
 }
 
 func (s *surface) sendImage(l imageLoad, part byte, img decodedImage) error {
-	return s.send(msgImage, func(w *writer) {
+	return s.sendData(msgImage, img.data, func(w *writer) {
 		w.u32(l.surface)
 		w.u32(uint32(l.id))
 		w.u32(l.request)
@@ -1284,7 +1313,6 @@ func (s *surface) sendImage(l imageLoad, part byte, img decodedImage) error {
 		w.points(img.size.Width) // 0: the bitmap's own pixels
 		w.points(img.size.Height)
 		w.u32(uint32(len(img.data)))
-		w.buf = append(w.buf, img.data...)
 	})
 }
 
@@ -1326,6 +1354,42 @@ func (s *surface) sendExtended(ext byte, body func(w *writer)) error {
 	})
 }
 
+// sendData writes metadata followed by a potentially large body.
+func (s *surface) sendData(kind byte, body []byte, metadata func(*writer)) error {
+	var head writer
+	metadata(&head)
+	return s.sendParts(kind, head.buf, body)
+}
+
+func (s *surface) sendParts(kind byte, head, body []byte) error {
+	size := len(head) + len(body)
+	if err := checkMessage(kind, size); err != nil {
+		return err
+	}
+	if size > bulkChunk {
+		if s.bulkReady.Load() {
+			return s.bulk.write(kind, head, body, func(fragment []byte) error {
+				return s.sendExtended(extBulk, func(w *writer) { w.buf = append(w.buf, fragment...) })
+			})
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// Preserve the direct write of large raw buffers to older runtimes.
+		buf := append(s.buf[:0], kind, 0, 0, 0, 0)
+		buf = append(buf, head...)
+		binary.BigEndian.PutUint32(buf[1:], uint32(size))
+		if _, err := s.out.Write(buf); err != nil {
+			return err
+		}
+		_, err := s.out.Write(body)
+		return err
+	}
+	return s.send(kind, func(w *writer) {
+		w.buf = append(w.buf, head...)
+		w.buf = append(w.buf, body...)
+	})
+}
+
 func (s *surface) sendBefore(kind byte, deadline time.Time, body func(w *writer)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1350,7 +1414,11 @@ func readMessage(r *bufio.Reader) (byte, []byte, error) {
 	if _, err := io.ReadFull(r, head[:]); err != nil {
 		return 0, nil, err
 	}
-	payload := make([]byte, binary.BigEndian.Uint32(head[1:]))
+	size := binary.BigEndian.Uint32(head[1:])
+	if head[0] == msgBulkReply && size > bulkHeader+bulkChunk {
+		return 0, nil, errBulkFrame
+	}
+	payload := make([]byte, size)
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return 0, nil, err
 	}
@@ -1803,12 +1871,11 @@ func (s *surface) RegisterFont(data []byte) error {
 	}
 	// Typeface reads a collection's first face.
 	f := faces[0]
-	return s.send(msgFontData, func(w *writer) {
+	return s.sendData(msgFontData, data, func(w *writer) {
 		w.str(f.Family)
 		w.u16(uint16(f.Weight))
 		w.flags(f.Italic)
 		w.u32(uint32(len(data)))
-		w.buf = append(w.buf, data...)
 	})
 }
 
@@ -1851,14 +1918,13 @@ func (s *surface) canvasRequest(r *reader) {
 
 // sendCanvasImage returns bytes, a failed decode (empty bytes), or an obsolete source (unavailable). The latter removes the pending entry so a later drawing of the source can request it after its mount has registered it again.
 func (s *surface) sendCanvasImage(surface uint32, key string, request uint32, img decodedImage, unavailable bool) {
-	if err := s.send(msgCanvasImage, func(w *writer) {
+	if err := s.sendData(msgCanvasImage, img.data, func(w *writer) {
 		w.u32(surface)
 		w.str(key)
 		w.u32(request)
 		w.flags(unavailable)
 		w.float(img.scale)
 		w.u32(uint32(len(img.data)))
-		w.buf = append(w.buf, img.data...)
 	}); err != nil {
 		log.Printf("nsgo: canvas: image %s: %v", key, err)
 	}

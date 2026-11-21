@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.TimeZone;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Owns one NSGo process and its pipe. A host may keep this object in an Application or foreground service, so that the app runs on while the NsgoView showing it is detached from its Activity.
@@ -41,6 +42,9 @@ public final class NsgoEngine {
     private final Context application;
     private Process process;
     private DataOutputStream out;
+    private volatile boolean bulkReady;
+    private final Object bulkTransfer = new Object();
+    private final ReentrantReadWriteLock bulkPriority = new ReentrantReadWriteLock(true);
     private Listener listener;
     private boolean readerStarted;
     private boolean closed;
@@ -151,16 +155,50 @@ public final class NsgoEngine {
         return !closed && process != null && process.isAlive();
     }
 
-    /** Writes one protocol message, serialized with every other writer. */
-    synchronized void write(int kind, byte[] payload) {
-        if (out == null || closed) return;
+    /** Writes a message, letting text replies pass between bulk reply fragments. */
+    void write(int kind, byte[] payload) {
+        if (kind == Protocol.TEXT_REPLY) {
+            bulkPriority.writeLock().lock();
+            try {
+                writeFrame(kind, payload, 0, payload.length, false);
+            } finally {
+                bulkPriority.writeLock().unlock();
+            }
+        } else if (bulkReady && payload.length > Protocol.BULK_CHUNK &&
+                (kind == Protocol.FOLDER_REPLY || kind == Protocol.FETCHED)) {
+            synchronized (bulkTransfer) {
+                for (int offset = 0; offset < payload.length; ) {
+                    int length = Math.min(Protocol.BULK_CHUNK, payload.length - offset);
+                    bulkPriority.readLock().lock();
+                    try {
+                        if (!writeFrame(kind, payload, offset, length, true)) return;
+                    } finally {
+                        bulkPriority.readLock().unlock();
+                    }
+                    offset += length;
+                }
+            }
+        } else {
+            writeFrame(kind, payload, 0, payload.length, false);
+        }
+    }
+
+    private synchronized boolean writeFrame(int kind, byte[] payload, int offset, int length, boolean fragment) {
+        if (out == null || closed) return false;
         try {
-            out.writeByte(kind);
-            out.writeInt(payload.length);
-            out.write(payload);
+            out.writeByte(fragment ? Protocol.BULK_REPLY : kind);
+            out.writeInt(length + (fragment ? Protocol.BULK_HEADER : 0));
+            if (fragment) {
+                out.writeByte(kind);
+                out.writeInt(payload.length);
+                out.writeInt(offset);
+            }
+            out.write(payload, offset, length);
             out.flush();
+            return true;
         } catch (IOException e) {
             Log.w(TAG, "app process unreachable", e);
+            return false;
         }
     }
 
@@ -194,7 +232,14 @@ public final class NsgoEngine {
     private void read(Process running) {
         IOException failure = null;
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(running.getInputStream()))) {
-            for (Protocol.Message message; (message = Protocol.readMessage(in)) != null; ) {
+            Protocol.BulkReader bulk = new Protocol.BulkReader();
+            for (Protocol.Message message; (message = Protocol.readMessage(in, bulk)) != null; ) {
+                // An empty EXT_BULK is Go's hello: the acknowledgement tells it this runtime reads bulk fragments.
+                if (message.kind == Protocol.EXTENDED && message.payload.length == 1 && (message.payload[0] & 0xff) == Protocol.EXT_BULK) {
+                    write(Protocol.BULK_REPLY, new byte[0]);
+                    bulkReady = true;
+                    continue;
+                }
                 Listener current;
                 synchronized (this) {
                     current = listener;
@@ -202,6 +247,7 @@ public final class NsgoEngine {
                 // The bound view answers even while detached: Go waits for its text replies.
                 if (current != null) current.onMessage(message.kind, message.payload);
             }
+            bulk.end();
         } catch (IOException e) {
             failure = e;
         }
