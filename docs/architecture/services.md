@@ -74,11 +74,12 @@ Windows checks the registry first because the shell asks the user for an app for
 
 | Target | Camera | Permission |
 | --- | --- | --- |
+| macOS | An `AVCaptureSession` of the default video capture device (built-in, external or Continuity Camera iPhone) with `AVCapturePhotoOutput` and `AVCaptureVideoPreviewLayer` in an AppKit sheet with Shutter and Cancel buttons, prepared with `apple.PreparePicked`; `Env.CanTakePhoto` is true while a video capture device is attached | `AVCaptureDevice`'s, asked once through `privacy`; the Info.plist declares `NSCameraUsageDescription` (`nsgo.yaml`'s `apple.info`), without which a photo fails |
+| Windows | WinRT `Windows.Media.Capture.CameraCaptureUI` owned by the window's HWND (`IInitializeWithWindow::Initialize`) calling `CaptureFileAsync(Photo)` into a temporary file that `internal/platform/picked` prepares and deletes; `Env.CanTakePhoto` checks `CameraCaptureUI` activation and a present `KSCATEGORY_VIDEO_CAMERA` device | Windows' capability consent store (`webcam`), checked before capture and surfaced from `E_ACCESSDENIED` |
+| Linux | XDG Desktop Portal `org.freedesktop.portal.Camera` (`IsCameraPresent`, `AccessCamera`, `OpenPipeWireRemote`) streaming over PipeWire into GStreamer (`pipewiresrc` + `videoconvert` + `appsink`) shown in a modal GTK 4 sheet with Shutter and Cancel buttons, encoding the captured RGBA frame to JPEG scaled to `MaxDimension` | The desktop portal's `AccessCamera` prompt |
 | iOS | `UIImagePickerController`, where `isSourceTypeAvailable` says the device has a camera, which the simulator has not | `AVCaptureDevice`'s, asked once; the Info.plist declares `NSCameraUsageDescription` (`nsgo.yaml`'s `apple.info`), without which a photo fails, since the system would end the app as it asks |
 | Android | `ACTION_IMAGE_CAPTURE`, where the device has `FEATURE_CAMERA_ANY`; the camera app writes into a file of the cache's `nsgo-camera`, the only files `FileProvider` opens for writing, which Java prepares and deletes | None, unless the manifest asks for `CAMERA`, which the camera app then needs granted: Java asks for it first (`permissionResult`) |
 | Web | `<input type=file capture=environment>` on touch screens (`pointer: coarse`), which mobile browsers open as the camera; prepared with the browser's codecs | The browser's |
-
-The desktops show no camera ([roadmap](../roadmap.md#finish-the-existing-platforms)).
 
 ## Scanning a code
 

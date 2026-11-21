@@ -989,7 +989,7 @@ func (s *surface) close() {
 		return
 	}
 	s.closed = true
-
+	endSurfaceCameras(s)
 	s.releaseChildWindows()
 	if s.scanner != nil {
 		s.scanner.finish(nil, "")
@@ -1193,6 +1193,7 @@ func (s *surface) environment() driver.Environment {
 		Speech:           apple.SpeechAvailable(),
 		Speak:            apple.SpeakAvailable(),
 		Audio:            apple.AudioAvailable(),
+		Camera:           cameraAvailable(),
 		Gamepads:         true,
 		AudioSchedule:    apple.AudioAvailable(),
 		CanSendInput:     true,
@@ -2165,6 +2166,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 			continue
 		case driver.ItemScanCode:
 			s.scanCode(*it.Scan, it.Count)
+			continue
+		case driver.ItemTakePhoto:
+			s.takePhoto(*it.Pick, it.Count)
 			continue
 		case driver.ItemPickFiles:
 			s.pickFiles(*it.Files, it.Count)

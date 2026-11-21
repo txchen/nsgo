@@ -33,8 +33,13 @@ toggleFullScreen: "Toggle Full Screen"
 enterFullScreen: "Enter Full Screen"
 exitFullScreen: "Exit Full Screen"
 close: "Close"
-cancel: "Cancel"
+cancel:
+  message: "Cancel"
+  description: The button that dismisses the camera or scanner sheet on macOS and Linux.
 scanCode: "Scan Code"
+takePhoto:
+  message: "Take Photo"
+  description: The title and shutter button of the camera sheet on macOS and Linux.
 guideDrag:
   message: "Drag {app} to the list above to allow {permission}."
   description: The macOS guide's panel under System Settings, which holds the app for the user to drag into the list of a privacy pane; app is the app's name and permission the pane's title, both shown in bold.

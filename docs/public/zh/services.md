@@ -78,7 +78,7 @@ if desktop.CanQuickLook(cx) {
 
 ## 照片与文件
 
-`cx.PickImages` 显示系统照片选择器，返回 `core.PickedFile`，其中包含字节、名称、类型和像素尺寸。`cx.TakePhoto` 在平台有相机时打开相机；`cx.Env().CanTakePhoto` 说明是否有。`cx.ScanCode` 打开相机预览，返回读到的第一个码，默认只读二维码，`ScanOptions.Kinds` 可以指定其他种类；用户关闭时返回 nil。`cx.Env().CanScanCode` 说明平台是否能扫码，支持带相机的 macOS、iOS 和 Android 设备。macOS 在发起请求的可见窗口上展示附属面板。macOS 和 iOS 需要在 `apple.info` 中设置 `NSCameraUsageDescription`，Android 需要在 `android.permissions` 中加入 `CAMERA`，除 PDF417 外都能识别。码里的文本是不可信的输入。
+`cx.PickImages` 显示系统照片选择器，返回 `core.PickedFile`，其中包含字节、名称、类型和像素尺寸。`cx.TakePhoto` 在平台有相机时打开相机，支持 macOS（含“连续互通相机”）、Windows、Linux（经由桌面门户的 `Camera` 与 PipeWire 视频流）、iOS、Android 和触控浏览器，在 macOS 和 iOS 上需要 `NSCameraUsageDescription`；`cx.Env().CanTakePhoto` 说明是否有。`cx.ScanCode` 打开相机预览，返回读到的第一个码，默认只读二维码，`ScanOptions.Kinds` 可以指定其他种类；用户关闭时返回 nil。`cx.Env().CanScanCode` 说明平台是否能扫码，支持带相机的 macOS、iOS 和 Android 设备。macOS 在发起请求的可见窗口上展示附属面板。macOS 和 iOS 需要在 `apple.info` 中设置 `NSCameraUsageDescription`，Android 需要在 `android.permissions` 中加入 `CAMERA`，除 PDF417 外都能识别。码里的文本是不可信的输入。
 
 测试中，`nsgotest.App.PickImages`、`nsgotest.App.TakePhoto` 和 `nsgotest.App.ScanCode` 接收照片选择或拍摄记录 `nsgotest.ImagePick`，或扫码记录 `nsgotest.CodeScan`，并代替系统界面回答。它们可用于无头测试和支持这些钩子的 `nsgo test -target` 宿主。目标没有相机时，用 `nsgotest.Environment(core.Environment{Camera: true, ScanCode: true})` 启动即可得到。
 

@@ -418,8 +418,9 @@ func (e *Env) CanSpeak() bool { return e.speak.Get() }
 // SupportsGamepads reports whether package gamepad reads game controllers here: macOS, iOS, Windows, Linux, Android and the web.
 func (e *Env) SupportsGamepads() bool { return e.gamepads.Get() }
 
-// CanTakePhoto reports whether Scope.TakePhoto shows a camera here: iOS
-// and Android devices with one, and browsers on touch screens.
+// CanTakePhoto reports whether Scope.TakePhoto shows a camera here:
+// macOS, Windows, Linux, iOS and Android devices with a camera, and
+// browsers on touch screens.
 func (e *Env) CanTakePhoto() bool { return e.camera.Get() }
 
 // CanScanCode reports whether Scope.ScanCode shows a camera that reads codes here: iOS devices with a camera, not the simulator, and Android devices with one whose app's manifest asks for CAMERA (nsgo.yaml's android.permissions).

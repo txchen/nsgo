@@ -356,6 +356,7 @@ func Run(app engine.App, opts Options) {
 		panic("nsgo: " + err.Error())
 	}
 	w.watchSession()
+	w.probeCamera()
 	if instance != nil {
 		instance.setDelivery(func(args engine.Launch) { w.post(func() { w.launched(args) }) })
 	}
@@ -873,10 +874,10 @@ func (w *window) shutdown(forced bool) {
 	w.releasePointer(false)
 	w.closeCanvasImages()
 	w.closeHotKeys()
-
 	w.cancelColorPick()
 	w.closeShares()
 	w.closePermissions()
+	w.closeCameras()
 	if w.loop != 0 {
 		// The app ends with this window: every hold goes, sent before the main loop returns.
 		endAwake(awakeEndTimeout)
@@ -1066,6 +1067,9 @@ func (w *window) apply(b *driver.MountBatch) {
 			continue
 		case driver.ItemPickImages:
 			w.pickImages(*it.Pick, it.Count)
+			continue
+		case driver.ItemTakePhoto:
+			w.takePhoto(*it.Pick, it.Count)
 			continue
 		case driver.ItemPickFiles:
 			w.pickFiles(*it.Files, it.Count)

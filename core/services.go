@@ -479,9 +479,13 @@ var ErrNoCamera = errors.New("core: no camera to take a photo with")
 // TakePhoto shows the system's camera for the user to take one photo
 // and calls done with it, a JPEG turned upright and prepared as o says,
 // or with nil when they cancelled; err says what failed, such as a
-// refused permission or ErrNoCamera. iOS shows UIImagePickerController
-// and needs NSCameraUsageDescription in the app's Info.plist; Android
-// starts the camera app, and the web a file chooser that offers it.
+// refused permission or ErrNoCamera. macOS shows an AVFoundation camera
+// sheet (which also uses Continuity Camera when attached) and needs
+// NSCameraUsageDescription in the app's Info.plist, as iOS's
+// UIImagePickerController does; Windows shows CameraCaptureUI, Linux
+// streams from the desktop portal's Camera over PipeWire, Android
+// starts the camera app, and the web shows a file chooser that offers
+// it.
 func (cx *Scope) TakePhoto(o PhotoOptions, done func(photo *PickedFile, err error)) {
 	t := cx.tree()
 	if t == nil || cx.denied(servicePicker, "") {
@@ -499,6 +503,10 @@ func (cx *Scope) TakePhoto(o PhotoOptions, done func(photo *PickedFile, err erro
 			return
 		}
 		if ev.Text != "" {
+			if ev.Text == driver.NoCamera {
+				done(nil, ErrNoCamera)
+				return
+			}
 			done(nil, errors.New(ev.Text))
 			return
 		}

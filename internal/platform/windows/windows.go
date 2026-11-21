@@ -440,6 +440,8 @@ type window struct {
 	// folderPick is the folder dialog showing, which wmFolderChange
 	// corrects (system.go).
 	folderPick    *comObject
+	cameraOps     map[*comObject]struct{}
+	cameraClosed  bool
 	popups        []popupRequest
 	popupTracking bool
 	// popupChoice is the item a test chose in the menu tracking, which
@@ -1382,6 +1384,9 @@ func (w *window) apply(b *driver.MountBatch) {
 			continue
 		case driver.ItemPickImages:
 			w.pickImages(*it.Pick, it.Count)
+			continue
+		case driver.ItemTakePhoto:
+			w.takePhoto(*it.Pick, it.Count)
 			continue
 		case driver.ItemPickFiles:
 			w.pickFiles(*it.Files, it.Count)
@@ -2766,6 +2771,7 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		w.removeTrays()
 		w.unregisterHotKeys()
 		endWindowGuide(w)
+		w.closeCameras()
 		w.releaseAllAwake()
 		w.loopback.Close()
 		// Clients let the window's providers go.

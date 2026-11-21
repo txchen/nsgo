@@ -82,6 +82,7 @@ const (
 	textClose
 	textCancel
 	textScanCode
+	textTakePhoto
 	textGuideDragHint
 	textPermissionAccessibility
 	textPermissionDeviceControl
@@ -146,6 +147,7 @@ var keyOfText = [numTexts]string{
 	"close",
 	"cancel",
 	"scanCode",
+	"takePhoto",
 	"guideDragHint",
 	"permissionAccessibility",
 	"permissionDeviceControl",
@@ -208,6 +210,7 @@ var textsEn = i18n.NewTexts(""+
 	"Close"+
 	"Cancel"+
 	"Scan Code"+
+	"Take Photo"+
 	"Drag"+
 	"Accessibility"+
 	"Device Control and Data Access"+
@@ -267,6 +270,7 @@ var textsEn = i18n.NewTexts(""+
 		5,
 		6,
 		9,
+		10,
 		4,
 		13,
 		30,
@@ -329,6 +333,7 @@ var textsZhHans = i18n.NewTexts(""+
 	"关闭"+
 	"取消"+
 	"扫码"+
+	"拍照"+
 	"拖移"+
 	"辅助功能"+
 	"设备控制和数据访问"+
@@ -385,6 +390,7 @@ var textsZhHans = i18n.NewTexts(""+
 		15,
 		15,
 		15,
+		6,
 		6,
 		6,
 		6,
@@ -725,6 +731,8 @@ func (msgs Messages) Close() string { return msgs.text(textClose) }
 
 // Cancel says "Cancel"
 // in the language the app shows under cx.
+//
+// The button that dismisses the camera or scanner sheet on macOS and Linux.
 func Cancel(cx *core.Scope) string { return For(cx).Cancel() }
 
 // Cancel is the package's Cancel in the language of msgs.
@@ -736,6 +744,15 @@ func ScanCode(cx *core.Scope) string { return For(cx).ScanCode() }
 
 // ScanCode is the package's ScanCode in the language of msgs.
 func (msgs Messages) ScanCode() string { return msgs.text(textScanCode) }
+
+// TakePhoto says "Take Photo"
+// in the language the app shows under cx.
+//
+// The title and shutter button of the camera sheet on macOS and Linux.
+func TakePhoto(cx *core.Scope) string { return For(cx).TakePhoto() }
+
+// TakePhoto is the package's TakePhoto in the language of msgs.
+func (msgs Messages) TakePhoto() string { return msgs.text(textTakePhoto) }
 
 // GuideDrag says "Drag {app} to the list above to allow {permission}."
 // in the language the app shows under cx.
