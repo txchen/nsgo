@@ -116,6 +116,14 @@ In five headless Chrome 158 runs on macOS arm64, a preloaded WAV cue requested o
 
 A sound is read by the backend's image reader (`imageload`, with its cache and limits; the browser on the web) and only decoded natively; a player's source goes to the native player as a video's does, which streams it. Formats are the platform decoders': WAV, AAC (`.m4a`) and MP3 decode everywhere and are the ones to ship; FLAC, Opus and Vorbis decode only where the platform does, and fail with `Decode` elsewhere. No Go decoder is added, as NSH adds none.
 
+## Pull PCM output
+
+`audio.NewOutput` opens a paused, scope-owned stream of interleaved Float32 PCM on macOS and iOS. It uses an AudioUnit default output on macOS and RemoteIO on iOS. The device calls the renderer on its audio thread. Each short render zero-fills the rest of its buffer and counts one underrun. The surface offers a `driver.AudioOutputFactory` to core, which applies the audio capability and closes the stream with its scope. PCM stays outside the mount protocol.
+
+The unit supplies a host-clock timestamp for each buffer. The output uses those timestamps and the client rate to advance `Position` only over frames whose presentation time has arrived. `Flush` stops and resets the unit, counts the client frames the reset discarded, and resumes an active stream with its previous presentation count. The count includes silence rendered for underruns. `Latency` reports the most recent block duration and scheduling lead.
+
+iOS uses the shared ambient audio session and requests the shortest positive buffer hint among active PCM streams. macOS uses the current device's buffer size. Changes to the route and iOS session interruptions pause the stream and post `OnInterrupt` to the scope. The app resumes with `Start`. Other targets return `audio.ErrUnsupported`.
+
 ## NSH's design and this one
 
 - **The package.** NSH's `Sound` and `AudioPlayer` are modules of its core runtime. Here the API's home is `audio`, as issue #36 asked, so `core`'s API does not grow, while `core` does the engine's part as it does `mobile`'s. A package of its own beside `microphone`, importing nothing, cannot: it would reach no backend, `asset:` resource, iOS session or Android runtime, and its callbacks would run off the engine.
