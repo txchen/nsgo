@@ -67,6 +67,7 @@ type Program struct {
 	Funcs        []Func
 	VertexFunc   VertexFunc
 	FragmentFunc FragmentFunc
+	ComputeFunc  ComputeFunc
 
 	// GPU pipeline metadata (docs/architecture/gpu.md). Left empty for legacy
 	// fragment-only shaders so existing FragmentLibrary paths stay unchanged.
@@ -75,6 +76,7 @@ type Program struct {
 	Bindings      []Binding
 	VertexEntry   string
 	FragmentEntry string
+	ComputeEntry  string
 
 	SourceID SourceID
 
@@ -107,6 +109,13 @@ type VertexFunc struct {
 // If 0 < index <= len(varyings), the param represents (index-1)th varying variable.
 type FragmentFunc struct {
 	Block *Block
+}
+
+// ComputeFunc holds a @compute entry point with its @workgroup_size(X, Y, Z)
+// and body block.
+type ComputeFunc struct {
+	WorkgroupSize [3]uint32
+	Block         *Block
 }
 
 type Block struct {
@@ -372,6 +381,10 @@ const (
 	TextureSampleCompare BuiltinFunc = "textureSampleCompare"
 	TextureLoad          BuiltinFunc = "textureLoad"
 	TextureDimensions    BuiltinFunc = "textureDimensions"
+	TextureStore         BuiltinFunc = "textureStore"
+	ArrayLength          BuiltinFunc = "arrayLength"
+	WorkgroupBarrier     BuiltinFunc = "workgroupBarrier"
+	StorageBarrier       BuiltinFunc = "storageBarrier"
 )
 
 func ParseBuiltinFunc(str string) (BuiltinFunc, bool) {

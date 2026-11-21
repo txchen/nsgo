@@ -47,6 +47,10 @@ type softPipeline struct {
 	combined *shaderir.Program
 }
 
+type softComputePipeline struct {
+	desc GPUComputePipelineDesc
+}
+
 // GPUSoftwareDevice is a deterministic pure-Go software 3D GPU rasterizer
 // and shaderir interpreter used by headless nsgotest and unit tests.
 type GPUSoftwareDevice struct {
@@ -55,12 +59,13 @@ type GPUSoftwareDevice struct {
 	colorBuf      []byte
 	depthBuf      []float32
 
-	buffers    map[GPUID]*softBuffer
-	textures   map[GPUID]*softTexture
-	samplers   map[GPUID]*softSampler
-	layouts    map[GPUID]*softBindGroupLayout
-	bindGroups map[GPUID]*softBindGroup
-	pipelines  map[GPUID]*softPipeline
+	buffers          map[GPUID]*softBuffer
+	textures         map[GPUID]*softTexture
+	samplers         map[GPUID]*softSampler
+	layouts          map[GPUID]*softBindGroupLayout
+	bindGroups       map[GPUID]*softBindGroup
+	pipelines        map[GPUID]*softPipeline
+	computePipelines map[GPUID]*softComputePipeline
 
 	frames []GPUFrame
 }
@@ -74,13 +79,14 @@ func NewGPUSoftwareDevice(width, height int, cfg GPUViewConfig) *GPUSoftwareDevi
 		height = 1
 	}
 	d := &GPUSoftwareDevice{
-		cfg:        cfg,
-		buffers:    map[GPUID]*softBuffer{},
-		textures:   map[GPUID]*softTexture{},
-		samplers:   map[GPUID]*softSampler{},
-		layouts:    map[GPUID]*softBindGroupLayout{},
-		bindGroups: map[GPUID]*softBindGroup{},
-		pipelines:  map[GPUID]*softPipeline{},
+		cfg:              cfg,
+		buffers:          map[GPUID]*softBuffer{},
+		textures:         map[GPUID]*softTexture{},
+		samplers:         map[GPUID]*softSampler{},
+		layouts:          map[GPUID]*softBindGroupLayout{},
+		bindGroups:       map[GPUID]*softBindGroup{},
+		pipelines:        map[GPUID]*softPipeline{},
+		computePipelines: map[GPUID]*softComputePipeline{},
 	}
 	d.Resize(width, height)
 	return d
@@ -287,6 +293,30 @@ func (d *GPUSoftwareDevice) execOp(op GPUResourceOp) (*GPUSoftReadback, error) {
 		d.pipelines[op.ID] = &softPipeline{desc: *op.Pipeline, combined: comb}
 	case GPUOpDestroyPipeline:
 		delete(d.pipelines, op.ID)
+	case GPUOpCreateComputePipeline:
+		if op.ComputePipeline == nil || op.ComputePipeline.Compute.IR == nil || op.ComputePipeline.Compute.IR.ComputeFunc.Block == nil {
+			return nil, fmt.Errorf("gpu: missing compute pipeline shader")
+		}
+		d.computePipelines[op.ID] = &softComputePipeline{desc: *op.ComputePipeline}
+	case GPUOpDestroyComputePipeline:
+		delete(d.computePipelines, op.ID)
+	case GPUOpReadBuffer:
+		b, ok := d.buffers[op.ID]
+		if !ok {
+			return &GPUSoftReadback{ID: op.ReadbackID, Err: fmt.Sprintf("unknown buffer %d", op.ID)}, nil
+		}
+		off := op.Offset
+		if off > uint64(len(b.data)) {
+			return &GPUSoftReadback{ID: op.ReadbackID, Err: "buffer readback offset out of bounds"}, nil
+		}
+		sz := op.ReadbackSize
+		if sz == 0 {
+			sz = uint64(len(b.data)) - off
+		}
+		if off+sz > uint64(len(b.data)) {
+			return &GPUSoftReadback{ID: op.ReadbackID, Err: "buffer readback range out of bounds"}, nil
+		}
+		return &GPUSoftReadback{ID: op.ReadbackID, Pixels: slices.Clone(b.data[off : off+sz])}, nil
 	case GPUOpReadTexture:
 		var src []byte
 		var tw, th int
@@ -368,6 +398,9 @@ func mergeShaderPrograms(vs, fs *shaderir.Program) *shaderir.Program {
 }
 
 func (d *GPUSoftwareDevice) execPass(pass GPUPass) error {
+	if pass.IsCompute {
+		return d.execComputePass(pass)
+	}
 	var colorPix []byte
 	var depthPix []float32
 	var targetW, targetH int
@@ -611,6 +644,100 @@ func (d *GPUSoftwareDevice) execPass(pass GPUPass) error {
 			}
 		case GPUCmdDrawIndexedInstanced:
 			if err := draw(true, cmd.U0, cmd.U1, cmd.U2, cmd.U3, cmd.I0); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (d *GPUSoftwareDevice) execComputePass(pass GPUPass) error {
+	var pipe *softComputePipeline
+	bindGroups := map[uint32]*softBindGroup{}
+
+	dispatch := func(numX, numY, numZ uint32) error {
+		if pipe == nil || pipe.desc.Compute.IR == nil || pipe.desc.Compute.IR.ComputeFunc.Block == nil {
+			return fmt.Errorf("gpu: dispatch without bound compute pipeline")
+		}
+		if numX == 0 || numY == 0 || numZ == 0 {
+			return nil
+		}
+		prog := pipe.desc.Compute.IR
+		ws := prog.ComputeFunc.WorkgroupSize
+		if ws[0] == 0 {
+			ws[0] = 1
+		}
+		if ws[1] == 0 {
+			ws[1] = 1
+		}
+		if ws[2] == 0 {
+			ws[2] = 1
+		}
+		ctx := &softDrawCtx{
+			dev:        d,
+			prog:       prog,
+			bindGroups: bindGroups,
+		}
+		block := prog.ComputeFunc.Block
+		for wgZ := uint32(0); wgZ < numZ; wgZ++ {
+			for wgY := uint32(0); wgY < numY; wgY++ {
+				for wgX := uint32(0); wgX < numX; wgX++ {
+					for lz := uint32(0); lz < ws[2]; lz++ {
+						for ly := uint32(0); ly < ws[1]; ly++ {
+							for lx := uint32(0); lx < ws[0]; lx++ {
+								locals := make([]irVal, len(block.LocalVars))
+								for i, lt := range block.LocalVars {
+									locals[i] = zeroIRVal(lt)
+								}
+								vm := &irVM{
+									ctx:           ctx,
+									locals:        locals,
+									globalID:      [3]uint32{wgX*ws[0] + lx, wgY*ws[1] + ly, wgZ*ws[2] + lz},
+									localID:       [3]uint32{lx, ly, lz},
+									workgroupID:   [3]uint32{wgX, wgY, wgZ},
+									numWorkgroups: [3]uint32{numX, numY, numZ},
+									localIdx:      lz*ws[1]*ws[0] + ly*ws[0] + lx,
+								}
+								vm.execBlock(block)
+							}
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	for _, cmd := range pass.Commands {
+		switch cmd.Kind {
+		case GPUCmdSetComputePipeline:
+			p, ok := d.computePipelines[cmd.ID]
+			if !ok {
+				return fmt.Errorf("gpu: unknown compute pipeline %d", cmd.ID)
+			}
+			pipe = p
+		case GPUCmdSetBindGroup:
+			bg, ok := d.bindGroups[cmd.ID]
+			if !ok {
+				return fmt.Errorf("gpu: unknown bind group %d", cmd.ID)
+			}
+			bindGroups[cmd.Slot] = bg
+		case GPUCmdDispatch:
+			if err := dispatch(cmd.U0, cmd.U1, cmd.U2); err != nil {
+				return err
+			}
+		case GPUCmdDispatchIndirect:
+			b, ok := d.buffers[cmd.ID]
+			if !ok {
+				return fmt.Errorf("gpu: unknown indirect dispatch buffer %d", cmd.ID)
+			}
+			if cmd.Offset+12 > uint64(len(b.data)) {
+				return fmt.Errorf("gpu: indirect dispatch buffer out of bounds")
+			}
+			x := binary.LittleEndian.Uint32(b.data[cmd.Offset : cmd.Offset+4])
+			y := binary.LittleEndian.Uint32(b.data[cmd.Offset+4 : cmd.Offset+8])
+			z := binary.LittleEndian.Uint32(b.data[cmd.Offset+8 : cmd.Offset+12])
+			if err := dispatch(x, y, z); err != nil {
 				return err
 			}
 		}
@@ -998,6 +1125,10 @@ func decodeVertexAttr(data []byte, format GPUVertexFormat) irVal {
 }
 
 func decodeUniformBytes(t shaderir.Type, data []byte, offset int) irVal {
+	return decodeBytes(t, data, offset, false)
+}
+
+func decodeBytes(t shaderir.Type, data []byte, offset int, std430 bool) irVal {
 	readF32 := func(off int) float32 {
 		if off < 0 || off+4 > len(data) {
 			return 0
@@ -1016,8 +1147,10 @@ func decodeUniformBytes(t shaderir.Type, data []byte, offset int) irVal {
 		v.f[0] = readF32(offset)
 	case shaderir.Int:
 		v.i[0] = int32(readU32(offset))
+		v.f[0] = float32(v.i[0])
 	case shaderir.Uint:
 		v.u[0] = readU32(offset)
+		v.f[0] = float32(v.u[0])
 	case shaderir.Bool:
 		v.b = readU32(offset) != 0
 	case shaderir.Vec2:
@@ -1030,18 +1163,20 @@ func decodeUniformBytes(t shaderir.Type, data []byte, offset int) irVal {
 		n := t.VectorElementCount()
 		for k := 0; k < n; k++ {
 			v.i[k] = int32(readU32(offset + k*4))
+			v.f[k] = float32(v.i[k])
 		}
 	case shaderir.UVec2, shaderir.UVec3, shaderir.UVec4:
 		n := t.VectorElementCount()
 		for k := 0; k < n; k++ {
 			v.u[k] = readU32(offset + k*4)
+			v.f[k] = float32(v.u[k])
 		}
 	case shaderir.Mat2, shaderir.Mat3, shaderir.Mat4,
 		shaderir.Mat2x3, shaderir.Mat2x4, shaderir.Mat3x2, shaderir.Mat3x4, shaderir.Mat4x2, shaderir.Mat4x3:
 		cols, rows := t.MatrixCols(), t.MatrixRows()
 		colStride := rows * 4
 		if rows == 3 {
-			colStride = 16 // WGSL/std140 column alignment for vec3
+			colStride = 16 // WGSL/std140/std430 column alignment for vec3
 		}
 		for c := 0; c < cols; c++ {
 			for r := 0; r < rows; r++ {
@@ -1051,31 +1186,132 @@ func decodeUniformBytes(t shaderir.Type, data []byte, offset int) irVal {
 	case shaderir.Struct:
 		v.fields = make([]irVal, len(t.Sub))
 		for i, ft := range t.Sub {
-			v.fields[i] = decodeUniformBytes(ft, data, offset+t.StructFieldOffset(i))
+			foff := t.StructFieldOffset(i)
+			if std430 {
+				foff = t.StorageStructFieldOffset(i)
+			}
+			v.fields[i] = decodeBytes(ft, data, offset+foff, std430)
 		}
 	case shaderir.Array:
 		v.fields = make([]irVal, t.Length)
 		elem := t.Sub[0]
-		stride := ((elem.SizeBytes() + max(elem.AlignBytes(), 16) - 1) / max(elem.AlignBytes(), 16)) * max(elem.AlignBytes(), 16)
+		var stride int
+		if std430 {
+			stride = elem.StorageStride()
+		} else {
+			a := max(elem.AlignBytes(), 16)
+			stride = ((elem.SizeBytes() + a - 1) / a) * a
+		}
 		for i := 0; i < t.Length; i++ {
-			v.fields[i] = decodeUniformBytes(elem, data, offset+i*stride)
+			v.fields[i] = decodeBytes(elem, data, offset+i*stride, std430)
 		}
 	}
 	return v
 }
 
+func encodeBytes(t shaderir.Type, data []byte, offset int, v irVal, std430 bool) {
+	writeF32 := func(off int, val float32) {
+		if off < 0 || off+4 > len(data) {
+			return
+		}
+		binary.LittleEndian.PutUint32(data[off:off+4], math.Float32bits(val))
+	}
+	writeU32 := func(off int, val uint32) {
+		if off < 0 || off+4 > len(data) {
+			return
+		}
+		binary.LittleEndian.PutUint32(data[off:off+4], val)
+	}
+	switch t.Main {
+	case shaderir.Float:
+		writeF32(offset, v.f[0])
+	case shaderir.Int:
+		writeU32(offset, uint32(v.i[0]))
+	case shaderir.Uint:
+		writeU32(offset, v.u[0])
+	case shaderir.Bool:
+		if v.b {
+			writeU32(offset, 1)
+		} else {
+			writeU32(offset, 0)
+		}
+	case shaderir.Vec2:
+		writeF32(offset, v.f[0])
+		writeF32(offset+4, v.f[1])
+	case shaderir.Vec3:
+		writeF32(offset, v.f[0])
+		writeF32(offset+4, v.f[1])
+		writeF32(offset+8, v.f[2])
+	case shaderir.Vec4:
+		writeF32(offset, v.f[0])
+		writeF32(offset+4, v.f[1])
+		writeF32(offset+8, v.f[2])
+		writeF32(offset+12, v.f[3])
+	case shaderir.IVec2, shaderir.IVec3, shaderir.IVec4:
+		n := t.VectorElementCount()
+		for k := 0; k < n; k++ {
+			writeU32(offset+k*4, uint32(v.i[k]))
+		}
+	case shaderir.UVec2, shaderir.UVec3, shaderir.UVec4:
+		n := t.VectorElementCount()
+		for k := 0; k < n; k++ {
+			writeU32(offset+k*4, v.u[k])
+		}
+	case shaderir.Mat2, shaderir.Mat3, shaderir.Mat4,
+		shaderir.Mat2x3, shaderir.Mat2x4, shaderir.Mat3x2, shaderir.Mat3x4, shaderir.Mat4x2, shaderir.Mat4x3:
+		cols, rows := t.MatrixCols(), t.MatrixRows()
+		colStride := rows * 4
+		if rows == 3 {
+			colStride = 16
+		}
+		for c := 0; c < cols; c++ {
+			for r := 0; r < rows; r++ {
+				writeF32(offset+c*colStride+r*4, v.f[c*rows+r])
+			}
+		}
+	case shaderir.Struct:
+		for i, ft := range t.Sub {
+			if i >= len(v.fields) {
+				break
+			}
+			foff := t.StructFieldOffset(i)
+			if std430 {
+				foff = t.StorageStructFieldOffset(i)
+			}
+			encodeBytes(ft, data, offset+foff, v.fields[i], std430)
+		}
+	case shaderir.Array:
+		elem := t.Sub[0]
+		var stride int
+		if std430 {
+			stride = elem.StorageStride()
+		} else {
+			a := max(elem.AlignBytes(), 16)
+			stride = ((elem.SizeBytes() + a - 1) / a) * a
+		}
+		for i := 0; i < t.Length && i < len(v.fields); i++ {
+			encodeBytes(elem, data, offset+i*stride, v.fields[i], std430)
+		}
+	}
+}
+
 type irVM struct {
-	ctx         *softDrawCtx
-	locals      []irVal
-	vertID      uint32
-	instID      uint32
-	frontFacing bool
-	fragCoord   [4]float32
-	returned    bool
-	discarded   bool
-	broken      bool
-	continued   bool
-	retVal      irVal
+	ctx           *softDrawCtx
+	locals        []irVal
+	vertID        uint32
+	instID        uint32
+	frontFacing   bool
+	fragCoord     [4]float32
+	globalID      [3]uint32
+	localID       [3]uint32
+	workgroupID   [3]uint32
+	numWorkgroups [3]uint32
+	localIdx      uint32
+	returned      bool
+	discarded     bool
+	broken        bool
+	continued     bool
+	retVal        irVal
 }
 
 func (vm *irVM) execBlock(b *shaderir.Block) {
@@ -1125,8 +1361,18 @@ func (vm *irVM) execBlock(b *shaderir.Block) {
 func (vm *irVM) execFor(s shaderir.Stmt) {
 	var cur, end, delta int64
 	if len(s.Exprs) >= 2 {
-		cur = int64(vm.evalExpr(s.Exprs[0]).i[0])
-		end = int64(vm.evalExpr(s.Exprs[1]).i[0])
+		v0 := vm.evalExpr(s.Exprs[0])
+		v1 := vm.evalExpr(s.Exprs[1])
+		if v0.typ.Main == shaderir.Uint {
+			cur = int64(v0.u[0])
+		} else {
+			cur = int64(v0.i[0])
+		}
+		if v1.typ.Main == shaderir.Uint {
+			end = int64(v1.u[0])
+		} else {
+			end = int64(v1.i[0])
+		}
 	} else {
 		cur, _ = constant.Int64Val(s.ForInit)
 		end, _ = constant.Int64Val(s.ForEnd)
@@ -1153,7 +1399,7 @@ func (vm *irVM) execFor(s shaderir.Stmt) {
 			break
 		}
 		if s.ForVarIndex >= 0 && s.ForVarIndex < len(vm.locals) {
-			vm.locals[s.ForVarIndex] = irVal{typ: s.ForVarType, i: [4]int32{int32(cur)}, u: [4]uint32{uint32(cur)}}
+			vm.locals[s.ForVarIndex] = irVal{typ: s.ForVarType, i: [4]int32{int32(cur)}, u: [4]uint32{uint32(cur)}, f: [16]float32{float32(cur)}}
 		}
 		vm.execBlock(s.Blocks[0])
 		if vm.returned || vm.discarded {
@@ -1168,7 +1414,128 @@ func (vm *irVM) execFor(s shaderir.Stmt) {
 	}
 }
 
+type storageAddr struct {
+	buf      *softBuffer
+	offset   int
+	boundEnd int
+	typ      shaderir.Type
+	swizzle  string
+	writable bool
+}
+
+func (vm *irVM) resolveStorageAddr(e shaderir.Expr) (storageAddr, bool) {
+	switch e.Type {
+	case shaderir.BindingVariable:
+		if e.Index < 0 || e.Index >= len(vm.ctx.prog.Bindings) {
+			return storageAddr{}, false
+		}
+		b := vm.ctx.prog.Bindings[e.Index]
+		if b.Kind != shaderir.BindingStorageBufferRead && b.Kind != shaderir.BindingStorageBufferReadWrite {
+			return storageAddr{}, false
+		}
+		bg := vm.ctx.bindGroups[b.Group]
+		if bg == nil {
+			return storageAddr{}, false
+		}
+		entry, ok := bg.entries[b.Binding]
+		if !ok {
+			return storageAddr{}, false
+		}
+		buf := vm.ctx.dev.buffers[entry.Buffer]
+		if buf == nil {
+			return storageAddr{}, false
+		}
+		boundEnd := len(buf.data)
+		if entry.Size > 0 && int(entry.Offset+entry.Size) < boundEnd {
+			boundEnd = int(entry.Offset + entry.Size)
+		}
+		return storageAddr{
+			buf:      buf,
+			offset:   int(entry.Offset),
+			boundEnd: boundEnd,
+			typ:      b.Type,
+			writable: b.Kind == shaderir.BindingStorageBufferReadWrite,
+		}, true
+	case shaderir.FieldSelector:
+		addr, ok := vm.resolveStorageAddr(e.Exprs[0])
+		if !ok {
+			return storageAddr{}, false
+		}
+		switch m := e.Exprs[1]; m.Type {
+		case shaderir.StructMember:
+			if addr.typ.Main != shaderir.Struct || m.Index < 0 || m.Index >= len(addr.typ.Sub) {
+				return storageAddr{}, false
+			}
+			addr.offset += addr.typ.StorageStructFieldOffset(m.Index)
+			addr.typ = addr.typ.Sub[m.Index]
+			addr.swizzle = ""
+			return addr, true
+		case shaderir.SwizzlingExpr:
+			addr.swizzle = m.Swizzling
+			return addr, true
+		}
+	case shaderir.Index:
+		addr, ok := vm.resolveStorageAddr(e.Exprs[0])
+		if !ok {
+			return storageAddr{}, false
+		}
+		idxVal := vm.evalExpr(e.Exprs[1])
+		idx := int(idxVal.i[0])
+		if idxVal.typ.Main == shaderir.Uint {
+			idx = int(idxVal.u[0])
+		}
+		if idx < 0 {
+			return storageAddr{}, false
+		}
+		switch {
+		case addr.typ.Main == shaderir.Array && len(addr.typ.Sub) > 0:
+			elem := addr.typ.Sub[0]
+			addr.offset += idx * elem.StorageStride()
+			addr.typ = elem
+			addr.swizzle = ""
+			return addr, true
+		case addr.typ.IsFloatVector() || addr.typ.IsIntegerVector():
+			addr.offset += idx * 4
+			addr.typ = shaderir.Type{Main: addr.typ.Scalar()}
+			addr.swizzle = ""
+			return addr, true
+		case addr.typ.IsMatrix():
+			rows := addr.typ.MatrixRows()
+			colStride := rows * 4
+			if rows == 3 {
+				colStride = 16
+			}
+			addr.offset += idx * colStride
+			addr.typ = shaderir.Type{Main: shaderir.VectorOf(shaderir.Float, rows)}
+			addr.swizzle = ""
+			return addr, true
+		}
+	}
+	return storageAddr{}, false
+}
+
 func (vm *irVM) assignExpr(lhs shaderir.Expr, val irVal) {
+	if addr, ok := vm.resolveStorageAddr(lhs); ok {
+		if !addr.writable || addr.buf == nil || addr.boundEnd > len(addr.buf.data) {
+			return
+		}
+		slice := addr.buf.data[:addr.boundEnd]
+		if addr.swizzle != "" {
+			cur := decodeBytes(addr.typ, slice, addr.offset, true)
+			for i, ch := range addr.swizzle {
+				ci := swizzleIdx(byte(ch))
+				if ci >= 0 && ci < 4 {
+					cur.f[ci] = val.f[i]
+					cur.i[ci] = val.i[i]
+					cur.u[ci] = val.u[i]
+				}
+			}
+			encodeBytes(addr.typ, slice, addr.offset, cur, true)
+			return
+		}
+		encodeBytes(addr.typ, slice, addr.offset, val, true)
+		return
+	}
 	switch lhs.Type {
 	case shaderir.LocalVariable:
 		if lhs.Index >= 0 && lhs.Index < len(vm.locals) {
@@ -1189,6 +1556,8 @@ func (vm *irVM) assignExpr(lhs shaderir.Expr, val irVal) {
 				ci := swizzleIdx(byte(ch))
 				if ci >= 0 && ci < 4 {
 					base.f[ci] = val.f[i]
+					base.i[ci] = val.i[i]
+					base.u[ci] = val.u[i]
 				}
 			}
 		}
@@ -1197,11 +1566,17 @@ func (vm *irVM) assignExpr(lhs shaderir.Expr, val irVal) {
 		if base == nil {
 			return
 		}
-		idx := int(vm.evalExpr(lhs.Exprs[1]).i[0])
+		idxVal := vm.evalExpr(lhs.Exprs[1])
+		idx := int(idxVal.i[0])
+		if idxVal.typ.Main == shaderir.Uint {
+			idx = int(idxVal.u[0])
+		}
 		if base.typ.Main == shaderir.Array && idx >= 0 && idx < len(base.fields) {
 			base.fields[idx] = val
 		} else if idx >= 0 && idx < 4 {
 			base.f[idx] = val.f[0]
+			base.i[idx] = val.i[0]
+			base.u[idx] = val.u[0]
 		}
 	}
 }
@@ -1258,13 +1633,43 @@ func (vm *irVM) evalExpr(e shaderir.Expr) irVal {
 	case shaderir.BuiltinInput:
 		switch shaderir.StageBuiltin(e.Index) {
 		case shaderir.BuiltinVertexIndex:
-			return irVal{typ: shaderir.Type{Main: shaderir.Uint}, u: [4]uint32{vm.vertID}}
+			return irVal{typ: shaderir.Type{Main: shaderir.Uint}, u: [4]uint32{vm.vertID}, f: [16]float32{float32(vm.vertID)}}
 		case shaderir.BuiltinInstanceIndex:
-			return irVal{typ: shaderir.Type{Main: shaderir.Uint}, u: [4]uint32{vm.instID}}
+			return irVal{typ: shaderir.Type{Main: shaderir.Uint}, u: [4]uint32{vm.instID}, f: [16]float32{float32(vm.instID)}}
 		case shaderir.BuiltinFrontFacing:
 			return irVal{typ: shaderir.Type{Main: shaderir.Bool}, b: vm.frontFacing}
 		case shaderir.BuiltinPosition:
 			return irVal{typ: shaderir.Type{Main: shaderir.Vec4}, f: [16]float32{vm.fragCoord[0], vm.fragCoord[1], vm.fragCoord[2], vm.fragCoord[3]}}
+		case shaderir.BuiltinGlobalInvocationID:
+			return irVal{
+				typ: shaderir.Type{Main: shaderir.UVec3},
+				u:   [4]uint32{vm.globalID[0], vm.globalID[1], vm.globalID[2]},
+				f:   [16]float32{float32(vm.globalID[0]), float32(vm.globalID[1]), float32(vm.globalID[2])},
+			}
+		case shaderir.BuiltinLocalInvocationID:
+			return irVal{
+				typ: shaderir.Type{Main: shaderir.UVec3},
+				u:   [4]uint32{vm.localID[0], vm.localID[1], vm.localID[2]},
+				f:   [16]float32{float32(vm.localID[0]), float32(vm.localID[1]), float32(vm.localID[2])},
+			}
+		case shaderir.BuiltinWorkgroupID:
+			return irVal{
+				typ: shaderir.Type{Main: shaderir.UVec3},
+				u:   [4]uint32{vm.workgroupID[0], vm.workgroupID[1], vm.workgroupID[2]},
+				f:   [16]float32{float32(vm.workgroupID[0]), float32(vm.workgroupID[1]), float32(vm.workgroupID[2])},
+			}
+		case shaderir.BuiltinNumWorkgroups:
+			return irVal{
+				typ: shaderir.Type{Main: shaderir.UVec3},
+				u:   [4]uint32{vm.numWorkgroups[0], vm.numWorkgroups[1], vm.numWorkgroups[2]},
+				f:   [16]float32{float32(vm.numWorkgroups[0]), float32(vm.numWorkgroups[1]), float32(vm.numWorkgroups[2])},
+			}
+		case shaderir.BuiltinLocalInvocationIndex:
+			return irVal{
+				typ: shaderir.Type{Main: shaderir.Uint},
+				u:   [4]uint32{vm.localIdx},
+				f:   [16]float32{float32(vm.localIdx)},
+			}
 		}
 	case shaderir.StructConstruct:
 		v := zeroIRVal(*e.StructType)
@@ -1295,6 +1700,13 @@ func (vm *irVM) evalExpr(e shaderir.Expr) irVal {
 		}
 		return vm.evalExpr(e.Exprs[2])
 	case shaderir.FieldSelector:
+		if addr, ok := vm.resolveStorageAddr(e); ok {
+			v := decodeBytes(addr.typ, addr.buf.data[:addr.boundEnd], addr.offset, true)
+			if addr.swizzle != "" {
+				return evalSwizzle(v, addr.swizzle)
+			}
+			return v
+		}
 		base := vm.evalExpr(e.Exprs[0])
 		switch m := e.Exprs[1]; m.Type {
 		case shaderir.StructMember:
@@ -1305,6 +1717,9 @@ func (vm *irVM) evalExpr(e shaderir.Expr) irVal {
 			return evalSwizzle(base, m.Swizzling)
 		}
 	case shaderir.Index:
+		if addr, ok := vm.resolveStorageAddr(e); ok {
+			return decodeBytes(addr.typ, addr.buf.data[:addr.boundEnd], addr.offset, true)
+		}
 		base := vm.evalExpr(e.Exprs[0])
 		idxVal := vm.evalExpr(e.Exprs[1])
 		idx := int(idxVal.i[0])
@@ -1348,12 +1763,21 @@ func (vm *irVM) evalBinding(idx int) irVal {
 		return zeroIRVal(b.Type)
 	}
 	switch b.Kind {
-	case shaderir.BindingUniformBuffer, shaderir.BindingStorageBufferRead:
+	case shaderir.BindingUniformBuffer:
 		buf := vm.ctx.dev.buffers[entry.Buffer]
 		if buf == nil {
 			return zeroIRVal(b.Type)
 		}
-		return decodeUniformBytes(b.Type, buf.data, int(entry.Offset))
+		return decodeBytes(b.Type, buf.data, int(entry.Offset), false)
+	case shaderir.BindingStorageBufferRead, shaderir.BindingStorageBufferReadWrite:
+		buf := vm.ctx.dev.buffers[entry.Buffer]
+		if buf == nil {
+			return zeroIRVal(b.Type)
+		}
+		if b.Type.Main == shaderir.Array && b.Type.Length == 0 {
+			return irVal{typ: b.Type}
+		}
+		return decodeBytes(b.Type, buf.data, int(entry.Offset), true)
 	}
 	return zeroIRVal(b.Type)
 }
@@ -1418,6 +1842,16 @@ func (vm *irVM) evalBinary(op shaderir.Op, a, b irVal) irVal {
 				if jv != 0 {
 					out.i[k] = iv % jv
 				}
+			case shaderir.And:
+				out.i[k] = iv & jv
+			case shaderir.Or:
+				out.i[k] = iv | jv
+			case shaderir.Xor:
+				out.i[k] = iv ^ jv
+			case shaderir.LeftShift:
+				out.i[k] = iv << uint(jv&31)
+			case shaderir.RightShift:
+				out.i[k] = iv >> uint(jv&31)
 			}
 			out.f[k] = float32(out.i[k])
 			continue
@@ -1439,6 +1873,16 @@ func (vm *irVM) evalBinary(op shaderir.Op, a, b irVal) irVal {
 				if wv != 0 {
 					out.u[k] = uv % wv
 				}
+			case shaderir.And:
+				out.u[k] = uv & wv
+			case shaderir.Or:
+				out.u[k] = uv | wv
+			case shaderir.Xor:
+				out.u[k] = uv ^ wv
+			case shaderir.LeftShift:
+				out.u[k] = uv << (wv & 31)
+			case shaderir.RightShift:
+				out.u[k] = uv >> (wv & 31)
 			}
 			out.f[k] = float32(out.u[k])
 			continue
@@ -1568,12 +2012,17 @@ func (vm *irVM) evalCall(e shaderir.Expr) irVal {
 			locals[len(fn.InParams)+i] = zeroIRVal(lt)
 		}
 		sub := &irVM{
-			ctx:         vm.ctx,
-			locals:      locals,
-			vertID:      vm.vertID,
-			instID:      vm.instID,
-			frontFacing: vm.frontFacing,
-			fragCoord:   vm.fragCoord,
+			ctx:           vm.ctx,
+			locals:        locals,
+			vertID:        vm.vertID,
+			instID:        vm.instID,
+			frontFacing:   vm.frontFacing,
+			fragCoord:     vm.fragCoord,
+			globalID:      vm.globalID,
+			localID:       vm.localID,
+			workgroupID:   vm.workgroupID,
+			numWorkgroups: vm.numWorkgroups,
+			localIdx:      vm.localIdx,
 		}
 		sub.execBlock(fn.Block)
 		if sub.discarded {
@@ -1582,7 +2031,7 @@ func (vm *irVM) evalCall(e shaderir.Expr) irVal {
 		return sub.retVal
 	}
 
-	// Texture sampling needs raw binding indices before evaluating args.
+	// Resource/compute builtins needing raw binding/storage expressions before evaluating args.
 	switch callee.BuiltinFunc {
 	case shaderir.TextureSample, shaderir.TextureSampleLevel, shaderir.TextureSampleBias:
 		return vm.evalTextureSample(e.Exprs[1].Index, e.Exprs[2].Index, vm.evalExpr(e.Exprs[3]))
@@ -1590,6 +2039,22 @@ func (vm *irVM) evalCall(e shaderir.Expr) irVal {
 		return vm.evalTextureLoad(e.Exprs[1].Index, vm.evalExpr(e.Exprs[2]))
 	case shaderir.TextureDimensions:
 		return vm.evalTextureDimensions(e.Exprs[1].Index)
+	case shaderir.TextureStore:
+		vm.evalTextureStore(e.Exprs[1].Index, vm.evalExpr(e.Exprs[2]), vm.evalExpr(e.Exprs[3]))
+		return irVal{}
+	case shaderir.ArrayLength:
+		if len(e.Exprs) > 1 {
+			if addr, ok := vm.resolveStorageAddr(e.Exprs[1]); ok && addr.typ.Main == shaderir.Array && len(addr.typ.Sub) > 0 {
+				stride := addr.typ.Sub[0].StorageStride()
+				if stride > 0 && addr.boundEnd >= addr.offset {
+					cnt := uint32((addr.boundEnd - addr.offset) / stride)
+					return irVal{typ: shaderir.Type{Main: shaderir.Uint}, u: [4]uint32{cnt}, f: [16]float32{float32(cnt)}}
+				}
+			}
+		}
+		return irVal{typ: shaderir.Type{Main: shaderir.Uint}}
+	case shaderir.WorkgroupBarrier, shaderir.StorageBarrier:
+		return irVal{}
 	}
 
 	args := make([]irVal, len(e.Exprs)-1)
@@ -1607,15 +2072,45 @@ func (vm *irVM) evalCall(e shaderir.Expr) irVal {
 		}
 		return irVal{typ: shaderir.Type{Main: shaderir.Float}, f: [16]float32{args[0].f[0]}}
 	case shaderir.IntF:
-		return irVal{typ: shaderir.Type{Main: shaderir.Int}, i: [4]int32{int32(args[0].f[0])}}
+		var v int32
+		switch args[0].typ.Main {
+		case shaderir.Int:
+			v = args[0].i[0]
+		case shaderir.Uint:
+			v = int32(args[0].u[0])
+		default:
+			v = int32(args[0].f[0])
+		}
+		return irVal{typ: shaderir.Type{Main: shaderir.Int}, i: [4]int32{v}, f: [16]float32{float32(v)}}
 	case shaderir.UintF:
-		return irVal{typ: shaderir.Type{Main: shaderir.Uint}, u: [4]uint32{uint32(args[0].f[0])}}
+		var v uint32
+		switch args[0].typ.Main {
+		case shaderir.Uint:
+			v = args[0].u[0]
+		case shaderir.Int:
+			v = uint32(args[0].i[0])
+		default:
+			v = uint32(args[0].f[0])
+		}
+		return irVal{typ: shaderir.Type{Main: shaderir.Uint}, u: [4]uint32{v}, f: [16]float32{float32(v)}}
 	case shaderir.Vec2F:
 		return packFloatVec(shaderir.Vec2, 2, args)
 	case shaderir.Vec3F:
 		return packFloatVec(shaderir.Vec3, 3, args)
 	case shaderir.Vec4F:
 		return packFloatVec(shaderir.Vec4, 4, args)
+	case shaderir.IVec2F:
+		return packIntVec(shaderir.IVec2, 2, args)
+	case shaderir.IVec3F:
+		return packIntVec(shaderir.IVec3, 3, args)
+	case shaderir.IVec4F:
+		return packIntVec(shaderir.IVec4, 4, args)
+	case shaderir.UVec2F:
+		return packUintVec(shaderir.UVec2, 2, args)
+	case shaderir.UVec3F:
+		return packUintVec(shaderir.UVec3, 3, args)
+	case shaderir.UVec4F:
+		return packUintVec(shaderir.UVec4, 4, args)
 	case shaderir.Mat3F:
 		return packMat(shaderir.Mat3, 3, args)
 	case shaderir.Mat4F:
@@ -1668,10 +2163,28 @@ func (vm *irVM) evalCall(e shaderir.Expr) irVal {
 		}
 		return out
 	case shaderir.Min:
+		if args[0].typ.Scalar() == shaderir.Uint {
+			return mapUint2(args[0], args[1], func(a, b uint32) uint32 { return min(a, b) })
+		}
+		if args[0].typ.Scalar() == shaderir.Int {
+			return mapInt2(args[0], args[1], func(a, b int32) int32 { return min(a, b) })
+		}
 		return mapVec2(args[0], args[1], func(a, b float32) float32 { return min(a, b) })
 	case shaderir.Max:
+		if args[0].typ.Scalar() == shaderir.Uint {
+			return mapUint2(args[0], args[1], func(a, b uint32) uint32 { return max(a, b) })
+		}
+		if args[0].typ.Scalar() == shaderir.Int {
+			return mapInt2(args[0], args[1], func(a, b int32) int32 { return max(a, b) })
+		}
 		return mapVec2(args[0], args[1], func(a, b float32) float32 { return max(a, b) })
 	case shaderir.Clamp:
+		if args[0].typ.Scalar() == shaderir.Uint {
+			return mapUint3(args[0], args[1], args[2], func(x, lo, hi uint32) uint32 { return min(max(x, lo), hi) })
+		}
+		if args[0].typ.Scalar() == shaderir.Int {
+			return mapInt3(args[0], args[1], args[2], func(x, lo, hi int32) int32 { return min(max(x, lo), hi) })
+		}
 		return mapVec3(args[0], args[1], args[2], func(x, lo, hi float32) float32 { return min(max(x, lo), hi) })
 	case shaderir.Mix:
 		return mapVec3(args[0], args[1], args[2], func(a, b, t float32) float32 { return a*(1-t) + b*t })
@@ -1831,7 +2344,83 @@ func (vm *irVM) evalTextureDimensions(texIdx int) irVal {
 	if tex == nil {
 		return irVal{typ: shaderir.Type{Main: shaderir.UVec2}}
 	}
-	return irVal{typ: shaderir.Type{Main: shaderir.UVec2}, u: [4]uint32{tex.desc.Width, tex.desc.Height}}
+	return irVal{typ: shaderir.Type{Main: shaderir.UVec2}, u: [4]uint32{tex.desc.Width, tex.desc.Height}, f: [16]float32{float32(tex.desc.Width), float32(tex.desc.Height)}}
+}
+
+func (vm *irVM) evalTextureStore(texIdx int, coord, val irVal) {
+	tex := vm.lookupTexture(texIdx)
+	if tex == nil || tex.rgba == nil {
+		return
+	}
+	w, h := int(tex.desc.Width), int(tex.desc.Height)
+	var ix, iy int
+	if coord.typ.Scalar() == shaderir.Uint {
+		ix, iy = int(coord.u[0]), int(coord.u[1])
+	} else {
+		ix, iy = int(coord.i[0]), int(coord.i[1])
+	}
+	if ix < 0 || ix >= w || iy < 0 || iy >= h {
+		return
+	}
+	off := (iy*w + ix) * 4
+	tex.rgba[off+0] = floatToByte(val.f[0])
+	tex.rgba[off+1] = floatToByte(val.f[1])
+	tex.rgba[off+2] = floatToByte(val.f[2])
+	tex.rgba[off+3] = floatToByte(val.f[3])
+}
+
+func packIntVec(bt shaderir.BasicType, n int, args []irVal) irVal {
+	out := irVal{typ: shaderir.Type{Main: bt}}
+	if len(args) == 0 {
+		return out
+	}
+	if len(args) == 1 && args[0].typ.VectorElementCount() < 2 {
+		for i := 0; i < n; i++ {
+			out.i[i] = args[0].i[0]
+			out.f[i] = float32(args[0].i[0])
+		}
+		return out
+	}
+	k := 0
+	for _, a := range args {
+		cnt := a.typ.VectorElementCount()
+		if cnt < 1 {
+			cnt = 1
+		}
+		for i := 0; i < cnt && k < n; i++ {
+			out.i[k] = a.i[i]
+			out.f[k] = float32(a.i[i])
+			k++
+		}
+	}
+	return out
+}
+
+func packUintVec(bt shaderir.BasicType, n int, args []irVal) irVal {
+	out := irVal{typ: shaderir.Type{Main: bt}}
+	if len(args) == 0 {
+		return out
+	}
+	if len(args) == 1 && args[0].typ.VectorElementCount() < 2 {
+		for i := 0; i < n; i++ {
+			out.u[i] = args[0].u[0]
+			out.f[i] = float32(args[0].u[0])
+		}
+		return out
+	}
+	k := 0
+	for _, a := range args {
+		cnt := a.typ.VectorElementCount()
+		if cnt < 1 {
+			cnt = 1
+		}
+		for i := 0; i < cnt && k < n; i++ {
+			out.u[k] = a.u[i]
+			out.f[k] = float32(a.u[i])
+			k++
+		}
+	}
+	return out
 }
 
 func packFloatVec(bt shaderir.BasicType, n int, args []irVal) irVal {
@@ -1974,6 +2563,104 @@ func mapVec3(a, b, c irVal, fn func(float32, float32, float32) float32) irVal {
 			ci = 0
 		}
 		out.f[i] = fn(a.f[ai], b.f[bi], c.f[ci])
+	}
+	return out
+}
+
+func mapInt2(a, b irVal, fn func(int32, int32) int32) irVal {
+	n := max(a.typ.VectorElementCount(), b.typ.VectorElementCount())
+	if n < 1 {
+		n = 1
+	}
+	resT := a.typ
+	if b.typ.VectorElementCount() > a.typ.VectorElementCount() {
+		resT = b.typ
+	}
+	out := irVal{typ: resT}
+	aS, bS := a.typ.VectorElementCount() < 2, b.typ.VectorElementCount() < 2
+	for i := 0; i < n; i++ {
+		ai, bi := i, i
+		if aS {
+			ai = 0
+		}
+		if bS {
+			bi = 0
+		}
+		out.i[i] = fn(a.i[ai], b.i[bi])
+		out.f[i] = float32(out.i[i])
+	}
+	return out
+}
+
+func mapUint2(a, b irVal, fn func(uint32, uint32) uint32) irVal {
+	n := max(a.typ.VectorElementCount(), b.typ.VectorElementCount())
+	if n < 1 {
+		n = 1
+	}
+	resT := a.typ
+	if b.typ.VectorElementCount() > a.typ.VectorElementCount() {
+		resT = b.typ
+	}
+	out := irVal{typ: resT}
+	aS, bS := a.typ.VectorElementCount() < 2, b.typ.VectorElementCount() < 2
+	for i := 0; i < n; i++ {
+		ai, bi := i, i
+		if aS {
+			ai = 0
+		}
+		if bS {
+			bi = 0
+		}
+		out.u[i] = fn(a.u[ai], b.u[bi])
+		out.f[i] = float32(out.u[i])
+	}
+	return out
+}
+
+func mapInt3(a, b, c irVal, fn func(int32, int32, int32) int32) irVal {
+	n := max(a.typ.VectorElementCount(), max(b.typ.VectorElementCount(), c.typ.VectorElementCount()))
+	if n < 1 {
+		n = 1
+	}
+	out := irVal{typ: a.typ}
+	aS, bS, cS := a.typ.VectorElementCount() < 2, b.typ.VectorElementCount() < 2, c.typ.VectorElementCount() < 2
+	for i := 0; i < n; i++ {
+		ai, bi, ci := i, i, i
+		if aS {
+			ai = 0
+		}
+		if bS {
+			bi = 0
+		}
+		if cS {
+			ci = 0
+		}
+		out.i[i] = fn(a.i[ai], b.i[bi], c.i[ci])
+		out.f[i] = float32(out.i[i])
+	}
+	return out
+}
+
+func mapUint3(a, b, c irVal, fn func(uint32, uint32, uint32) uint32) irVal {
+	n := max(a.typ.VectorElementCount(), max(b.typ.VectorElementCount(), c.typ.VectorElementCount()))
+	if n < 1 {
+		n = 1
+	}
+	out := irVal{typ: a.typ}
+	aS, bS, cS := a.typ.VectorElementCount() < 2, b.typ.VectorElementCount() < 2, c.typ.VectorElementCount() < 2
+	for i := 0; i < n; i++ {
+		ai, bi, ci := i, i, i
+		if aS {
+			ai = 0
+		}
+		if bS {
+			bi = 0
+		}
+		if cS {
+			ci = 0
+		}
+		out.u[i] = fn(a.u[ai], b.u[bi], c.u[ci])
+		out.f[i] = float32(out.u[i])
 	}
 	return out
 }

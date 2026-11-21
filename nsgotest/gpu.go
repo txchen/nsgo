@@ -14,16 +14,36 @@ func NoGPU() Option {
 	return func(a *App) { a.noGPU = true }
 }
 
+// NoGPUCompute disables compute shader and storage buffer capabilities
+// (Device.SupportsCompute() == false) to simulate WebGL 2 / OpenGL ES 3.0
+// targets in headless tests.
+func NoGPUCompute() Option {
+	return func(a *App) { a.noGPUCompute = true }
+}
+
+func (a *App) gpuFeatures() driver.GPUFeatures {
+	if a.noGPUCompute {
+		return driver.GPUFeatures{Depth32Float: true}
+	}
+	return driver.GPUFeatures{
+		StorageBuffers:  true,
+		StorageTextures: true,
+		Compute:         true,
+		Depth32Float:    true,
+	}
+}
+
 // GPUFrameRecord summarizes one off-commit GPUFrame submitted by a gpu.View.
 type GPUFrameRecord struct {
-	SurfaceID   uint32
-	ViewID      driver.NodeID
-	Generation  uint32
-	OpsCount    int
-	CopiesCount int
-	PassesCount int
-	DrawsCount  int
-	Present     bool
+	SurfaceID       uint32
+	ViewID          driver.NodeID
+	Generation      uint32
+	OpsCount        int
+	CopiesCount     int
+	PassesCount     int
+	DrawsCount      int
+	DispatchesCount int
+	Present         bool
 }
 
 type gpuViewState struct {
@@ -103,7 +123,7 @@ func (a *App) syncGPUViews(configured []*View, resized []*View) {
 					Height:        h,
 					SurfaceFormat: driver.GPUFormatRGBA8Unorm,
 					Limits:        driver.DefaultGPULimits(),
-					Features:      driver.GPUFeatures{Depth32Float: true},
+					Features:      a.gpuFeatures(),
 				},
 			})
 		}
@@ -154,24 +174,27 @@ func (a *App) submitGPU(frame driver.GPUFrame) {
 	if a.owner != nil {
 		owner = a.owner
 	}
-	var draws int
+	var draws, dispatches int
 	for _, p := range frame.Passes {
 		for _, c := range p.Commands {
 			switch c.Kind {
 			case driver.GPUCmdDraw, driver.GPUCmdDrawIndexed, driver.GPUCmdDrawInstanced, driver.GPUCmdDrawIndexedInstanced:
 				draws++
+			case driver.GPUCmdDispatch, driver.GPUCmdDispatchIndirect:
+				dispatches++
 			}
 		}
 	}
 	rec := GPUFrameRecord{
-		SurfaceID:   frame.SurfaceID,
-		ViewID:      frame.ViewID,
-		Generation:  frame.Generation,
-		OpsCount:    len(frame.Ops),
-		CopiesCount: len(frame.Copies),
-		PassesCount: len(frame.Passes),
-		DrawsCount:  draws,
-		Present:     frame.Present,
+		SurfaceID:       frame.SurfaceID,
+		ViewID:          frame.ViewID,
+		Generation:      frame.Generation,
+		OpsCount:        len(frame.Ops),
+		CopiesCount:     len(frame.Copies),
+		PassesCount:     len(frame.Passes),
+		DrawsCount:      draws,
+		DispatchesCount: dispatches,
+		Present:         frame.Present,
 	}
 	owner.gpuFrames = append(owner.gpuFrames, rec)
 
@@ -302,7 +325,7 @@ func (a *App) RestoreGPUDevice(selector string) {
 			Height:        h,
 			SurfaceFormat: driver.GPUFormatRGBA8Unorm,
 			Limits:        driver.DefaultGPULimits(),
-			Features:      driver.GPUFeatures{Depth32Float: true},
+			Features:      owner.gpuFeatures(),
 		},
 	})
 	a.Settle()

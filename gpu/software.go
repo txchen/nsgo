@@ -16,7 +16,20 @@ type SoftwareRenderer struct {
 
 // NewSoftwareRenderer creates a pure-Go software 3D GPU renderer with a swapchain
 // of width x height pixels and an optional depthFormat (e.g. FormatDepth24Plus).
+// Compute shaders, storage buffers, and storage textures are enabled by default.
 func NewSoftwareRenderer(width, height int, depthFormat TextureFormat) *SoftwareRenderer {
+	return NewSoftwareRendererWithFeatures(width, height, depthFormat, Features{
+		StorageBuffers:  true,
+		StorageTextures: true,
+		Compute:         true,
+		Depth32Float:    true,
+	})
+}
+
+// NewSoftwareRendererWithFeatures creates a pure-Go software 3D GPU renderer
+// with explicit capability flags (for example, Compute: false to test WebGL 2 /
+// OpenGL ES 3.0 fallback paths).
+func NewSoftwareRendererWithFeatures(width, height int, depthFormat TextureFormat, features Features) *SoftwareRenderer {
 	cfg := driver.GPUViewConfig{
 		ColorFormat: driver.GPUFormatRGBA8Unorm,
 		DepthFormat: driver.GPUTextureFormat(depthFormat),
@@ -32,7 +45,7 @@ func NewSoftwareRenderer(width, height int, depthFormat TextureFormat) *Software
 		height,
 		FormatRGBA8Unorm,
 		limitsFromDriver(driver.DefaultGPULimits()),
-		Features{Depth32Float: true},
+		features,
 	)
 	dev.submitFn = func(frame driver.GPUFrame) {
 		rbs, err := soft.Submit(frame)

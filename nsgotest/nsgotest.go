@@ -561,9 +561,11 @@ type App struct {
 	lastPressAt time.Time
 	clicks      uint32
 	// noGPU disables Env.SupportsGPU() in headless mode (NoGPU).
-	noGPU     bool
-	gpuViews  map[driver.NodeID]*gpuViewState
-	gpuFrames []GPUFrameRecord
+	noGPU bool
+	// noGPUCompute disables compute shaders and storage buffers (NoGPUCompute).
+	noGPUCompute bool
+	gpuViews     map[driver.NodeID]*gpuViewState
+	gpuFrames    []GPUFrameRecord
 }
 
 // Start runs app, a root view, and settles it; the test's cleanup disposes it. Under `nsgo test -target` it opens the app on that platform instead, in the main window on macOS, as there nsgo.Run shows a root view. With a macOS Environment app shows in the main window, as nsgo.Run shows a root view there, which steps act on; with any other, Windows and Linux included, it fills the app's one surface, as nsgo.Run's does. An app run with its function is tested with StartApp.

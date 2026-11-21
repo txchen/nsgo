@@ -151,6 +151,29 @@ func (d *Device) Limits() Limits { return d.limits }
 // Features returns optional features supported by the device.
 func (d *Device) Features() Features { return d.features }
 
+// Capabilities returns the active device's optional capabilities, including
+// whether compute shaders, storage buffers, and storage textures are supported.
+func (d *Device) Capabilities() DeviceCapabilities {
+	if d == nil {
+		return DeviceCapabilities{}
+	}
+	return DeviceCapabilities{
+		Compute:         d.features.Compute,
+		StorageBuffers:  d.features.StorageBuffers,
+		StorageTextures: d.features.StorageTextures,
+		MSAA4x:          d.features.MSAA4x,
+		Depth32Float:    d.features.Depth32Float,
+		Anisotropy:      d.features.Anisotropy,
+	}
+}
+
+// SupportsCompute reports whether the active device supports @compute shader
+// dispatch and read/write storage buffers. Targets without compute support
+// (such as WebGL 2 and OpenGL ES 3.0) return false.
+func (d *Device) SupportsCompute() bool {
+	return d != nil && d.features.Compute
+}
+
 // SurfaceFormat returns the swapchain's preferred color texture format.
 func (d *Device) SurfaceFormat() TextureFormat { return d.surfaceFormat }
 
@@ -334,6 +357,29 @@ func (p *Pipeline) Close() error {
 	return nil
 }
 
+// ComputePipeline is an immutable GPU compute shader pipeline.
+type ComputePipeline struct {
+	dev    *Device
+	id     driver.GPUID
+	desc   ComputePipelineDesc
+	closed bool
+}
+
+// ID returns the compute pipeline's numeric handle.
+func (p *ComputePipeline) ID() uint64 { return uint64(p.id) }
+
+// Close releases the compute pipeline immediately. Safe to call more than once.
+func (p *ComputePipeline) Close() error {
+	if p == nil || p.closed {
+		return nil
+	}
+	p.closed = true
+	if p.dev != nil && p.dev.alive() {
+		p.dev.enqueueOp(driver.GPUResourceOp{Kind: driver.GPUOpDestroyComputePipeline, ID: p.id})
+	}
+	return nil
+}
+
 // --- Resource constructors with synchronous validation ---
 
 // CreateBuffer allocates a retained GPU buffer scoped to cx.
@@ -389,6 +435,9 @@ func (d *Device) CreateTexture(cx *core.Scope, desc TextureDesc) (*Texture, erro
 	}
 	if desc.Usage == 0 {
 		return nil, Error{Code: ErrInvalidDescriptor, Message: "texture requires at least one Usage flag"}
+	}
+	if desc.Usage&TextureStorageBinding != 0 && !d.features.StorageTextures {
+		return nil, Error{Code: ErrUnsupported, Message: "storage textures are not supported on this device"}
 	}
 	if d.limits.MaxTextureDimension2D > 0 && (desc.Width > d.limits.MaxTextureDimension2D || desc.Height > d.limits.MaxTextureDimension2D) {
 		return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("texture %dx%d exceeds limit %d", desc.Width, desc.Height, d.limits.MaxTextureDimension2D)}
@@ -526,6 +575,18 @@ func (d *Device) CreateBindGroupLayout(cx *core.Scope, entries []BindGroupLayout
 			return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("duplicate binding %d in BindGroupLayout", e.Binding)}
 		}
 		seen[e.Binding] = true
+		if (e.Type == BindingStorage || e.Type == BindingStorageRead) && !d.features.StorageBuffers {
+			return nil, Error{Code: ErrUnsupported, Message: fmt.Sprintf("binding %d requires storage buffers, which are unsupported on this device", e.Binding)}
+		}
+		if e.Type == BindingStorage && !d.features.Compute {
+			return nil, Error{Code: ErrUnsupported, Message: fmt.Sprintf("binding %d requires read/write storage buffers, which require compute support", e.Binding)}
+		}
+		if e.Type == BindingStorageTexture && !d.features.StorageTextures {
+			return nil, Error{Code: ErrUnsupported, Message: fmt.Sprintf("binding %d requires storage textures, which are unsupported on this device", e.Binding)}
+		}
+		if e.Visibility == StageCompute && !d.features.Compute {
+			return nil, Error{Code: ErrUnsupported, Message: fmt.Sprintf("binding %d targets compute stage, which is unsupported on this device", e.Binding)}
+		}
 		vis := e.Visibility
 		if vis == 0 {
 			vis = StageAll
@@ -567,19 +628,41 @@ func (d *Device) CreateBindGroup(cx *core.Scope, layout *BindGroupLayout, entrie
 				return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d not present in BindGroupLayout", e.Binding)}
 			}
 			switch le.Type {
-			case BindingUniform, BindingStorageRead:
+			case BindingUniform, BindingStorageRead, BindingStorage:
 				if e.Buffer == nil || e.Buffer.closed || e.Buffer.dev != d {
 					return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d expects a live Buffer", e.Binding)}
 				}
 				if le.Type == BindingUniform && e.Buffer.usage&UsageUniform == 0 {
 					return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d buffer lacks UsageUniform", e.Binding)}
 				}
+				if (le.Type == BindingStorageRead || le.Type == BindingStorage) && e.Buffer.usage&UsageStorage == 0 {
+					return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d buffer lacks UsageStorage", e.Binding)}
+				}
 				if e.Offset > e.Buffer.size {
 					return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d buffer offset out of range", e.Binding)}
+				}
+				if e.Size > 0 && e.Offset+e.Size > e.Buffer.size {
+					return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d buffer range out of bounds", e.Binding)}
+				}
+				if (le.Type == BindingStorageRead || le.Type == BindingStorage) && d.limits.MaxStorageBufferBindingSize > 0 {
+					bindSize := e.Size
+					if bindSize == 0 {
+						bindSize = e.Buffer.size - e.Offset
+					}
+					if bindSize > d.limits.MaxStorageBufferBindingSize {
+						return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d storage range %d exceeds limit %d", e.Binding, bindSize, d.limits.MaxStorageBufferBindingSize)}
+					}
 				}
 			case BindingTexture:
 				if e.Texture == nil || e.Texture.closed || e.Texture.dev != d {
 					return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d expects a live Texture", e.Binding)}
+				}
+			case BindingStorageTexture:
+				if e.Texture == nil || e.Texture.closed || e.Texture.dev != d {
+					return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d expects a live storage Texture", e.Binding)}
+				}
+				if e.Texture.desc.Usage&TextureStorageBinding == 0 {
+					return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("binding %d texture lacks TextureStorageBinding", e.Binding)}
 				}
 			case BindingSampler, BindingComparisonSampler:
 				if e.Sampler == nil || e.Sampler.closed || e.Sampler.dev != d {
@@ -750,6 +833,61 @@ func (d *Device) CreatePipeline(cx *core.Scope, desc PipelineDesc) (*Pipeline, e
 	return p, nil
 }
 
+// CreateComputePipeline compiles and validates an immutable compute pipeline
+// scoped to cx. Returns ErrUnsupported on devices where SupportsCompute() is
+// false (such as WebGL 2 and OpenGL ES 3.0).
+func (d *Device) CreateComputePipeline(cx *core.Scope, desc ComputePipelineDesc) (*ComputePipeline, error) {
+	if !d.alive() {
+		return nil, Error{Code: ErrDeviceLost, Message: "device is lost or disposed"}
+	}
+	if !d.features.Compute {
+		return nil, Error{Code: ErrUnsupported, Message: "compute shaders are not supported on this device (WebGL 2 / GLES 3.0 requires CPU or render-pass fallback)"}
+	}
+	if desc.Compute.Module == nil || !desc.Compute.Module.HasComputeEntry(desc.Compute.EntryPoint) {
+		return nil, Error{Code: ErrInvalidDescriptor, Message: "compute pipeline requires a valid @compute shader stage"}
+	}
+	ws := desc.Compute.Module.WorkgroupSize()
+	if d.limits.MaxComputeWorkgroupSizeX > 0 && ws[0] > d.limits.MaxComputeWorkgroupSizeX {
+		return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("workgroup_size.x %d exceeds limit %d", ws[0], d.limits.MaxComputeWorkgroupSizeX)}
+	}
+	if d.limits.MaxComputeWorkgroupSizeY > 0 && ws[1] > d.limits.MaxComputeWorkgroupSizeY {
+		return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("workgroup_size.y %d exceeds limit %d", ws[1], d.limits.MaxComputeWorkgroupSizeY)}
+	}
+	if d.limits.MaxComputeWorkgroupSizeZ > 0 && ws[2] > d.limits.MaxComputeWorkgroupSizeZ {
+		return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("workgroup_size.z %d exceeds limit %d", ws[2], d.limits.MaxComputeWorkgroupSizeZ)}
+	}
+	if d.limits.MaxComputeInvocationsPerGroup > 0 && uint64(ws[0])*uint64(ws[1])*uint64(ws[2]) > uint64(d.limits.MaxComputeInvocationsPerGroup) {
+		return nil, Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("workgroup invocations %d exceed limit %d", uint64(ws[0])*uint64(ws[1])*uint64(ws[2]), d.limits.MaxComputeInvocationsPerGroup)}
+	}
+	if d.limits.MaxBindGroups > 0 && uint32(len(desc.Layouts)) > d.limits.MaxBindGroups {
+		return nil, Error{Code: ErrInvalidDescriptor, Message: "too many bind group layouts in compute pipeline"}
+	}
+	layoutIDs := make([]driver.GPUID, len(desc.Layouts))
+	for i, l := range desc.Layouts {
+		if l == nil || l.closed || l.dev != d {
+			return nil, Error{Code: ErrInvalidDescriptor, Message: "compute pipeline BindGroupLayout is nil or invalid"}
+		}
+		layoutIDs[i] = l.id
+	}
+	entry := desc.Compute.EntryPoint
+	if entry == "" && desc.Compute.Module.ir != nil {
+		entry = desc.Compute.Module.ir.ComputeEntry
+	}
+	dd := driver.GPUComputePipelineDesc{
+		Label: desc.Label,
+		Compute: driver.GPUShaderStage{
+			IR:         desc.Compute.Module.ir,
+			EntryPoint: entry,
+		},
+		Layouts: layoutIDs,
+	}
+	id := d.nextID()
+	d.enqueueOp(driver.GPUResourceOp{Kind: driver.GPUOpCreateComputePipeline, ID: id, ComputePipeline: &dd})
+	cp := &ComputePipeline{dev: d, id: id, desc: desc}
+	d.bindCleanup(cx, func() { _ = cp.Close() })
+	return cp, nil
+}
+
 // --- Data uploads ---
 
 // WriteBuffer copies data into buf starting at byte offset. Data is cloned
@@ -882,6 +1020,116 @@ func (e *Encoder) BeginRenderPass(desc RenderPassDesc) *RenderPass {
 			ColorAttachments: cas,
 			DepthStencil:     ds,
 		},
+	}
+}
+
+// BeginComputePass starts a compute pass on e. Call ComputePass.End when done.
+// Dispatching on a device where SupportsCompute() is false returns ErrUnsupported.
+func (e *Encoder) BeginComputePass() *ComputePass {
+	return &ComputePass{
+		enc:  e,
+		pass: driver.GPUPass{IsCompute: true},
+	}
+}
+
+// ComputePass records compute pipeline state, bind groups, and workgroup
+// dispatches for one compute pass.
+type ComputePass struct {
+	enc   *Encoder
+	pass  driver.GPUPass
+	ended bool
+}
+
+// SetPipeline binds the active compute pipeline.
+func (p *ComputePass) SetPipeline(pipe *ComputePipeline) {
+	if p == nil || p.ended || pipe == nil || pipe.closed {
+		return
+	}
+	p.pass.Commands = append(p.pass.Commands, driver.GPUCommand{
+		Kind: driver.GPUCmdSetComputePipeline,
+		ID:   pipe.id,
+	})
+}
+
+// SetBindGroup binds group to @group(slot) with optional dynamic offsets.
+func (p *ComputePass) SetBindGroup(slot uint32, group *BindGroup, dynamicOffsets ...uint32) {
+	if p == nil || p.ended || group == nil || group.closed {
+		return
+	}
+	p.pass.Commands = append(p.pass.Commands, driver.GPUCommand{
+		Kind:           driver.GPUCmdSetBindGroup,
+		Slot:           slot,
+		ID:             group.id,
+		DynamicOffsets: slices.Clone(dynamicOffsets),
+	})
+}
+
+// Dispatch dispatches (x, y, z) compute workgroups. Returns ErrUnsupported when
+// the device does not support compute shaders, or ErrInvalidDescriptor if the
+// pass has ended or dispatch dimensions are invalid.
+func (p *ComputePass) Dispatch(x, y, z uint32) error {
+	if p == nil || p.ended || p.enc == nil || p.enc.dev == nil {
+		return Error{Code: ErrInvalidDescriptor, Message: "compute pass is closed"}
+	}
+	dev := p.enc.dev
+	if !dev.alive() {
+		return Error{Code: ErrDeviceLost, Message: "device is lost or disposed"}
+	}
+	if !dev.SupportsCompute() {
+		return Error{Code: ErrUnsupported, Message: "compute dispatch is not supported on this device (WebGL 2 / GLES 3.0 requires CPU or render-pass fallback)"}
+	}
+	if x == 0 || y == 0 || z == 0 {
+		return Error{Code: ErrInvalidDescriptor, Message: "dispatch workgroup counts (x, y, z) must be positive"}
+	}
+	maxDim := dev.limits.MaxComputeWorkgroupsPerDim
+	if maxDim > 0 && (x > maxDim || y > maxDim || z > maxDim) {
+		return Error{Code: ErrInvalidDescriptor, Message: fmt.Sprintf("dispatch (%d, %d, %d) exceeds max workgroups per dimension %d", x, y, z, maxDim)}
+	}
+	p.pass.Commands = append(p.pass.Commands, driver.GPUCommand{
+		Kind: driver.GPUCmdDispatch,
+		U0:   x, U1: y, U2: z,
+	})
+	return nil
+}
+
+// DispatchIndirect dispatches workgroups whose (x, y, z) uint32 counts are read
+// from buf at byte offset (12 bytes, 4-byte aligned). buf must have UsageIndirect.
+func (p *ComputePass) DispatchIndirect(buf *Buffer, offset uint64) error {
+	if p == nil || p.ended || p.enc == nil || p.enc.dev == nil {
+		return Error{Code: ErrInvalidDescriptor, Message: "compute pass is closed"}
+	}
+	dev := p.enc.dev
+	if !dev.alive() {
+		return Error{Code: ErrDeviceLost, Message: "device is lost or disposed"}
+	}
+	if !dev.SupportsCompute() {
+		return Error{Code: ErrUnsupported, Message: "compute dispatch is not supported on this device (WebGL 2 / GLES 3.0 requires CPU or render-pass fallback)"}
+	}
+	if buf == nil || buf.closed || buf.dev != dev {
+		return Error{Code: ErrInvalidDescriptor, Message: "DispatchIndirect requires a live Buffer"}
+	}
+	if buf.usage&UsageIndirect == 0 {
+		return Error{Code: ErrInvalidDescriptor, Message: "DispatchIndirect buffer lacks UsageIndirect"}
+	}
+	if offset%4 != 0 || offset+12 > buf.size {
+		return Error{Code: ErrInvalidDescriptor, Message: "DispatchIndirect offset must be 4-byte aligned with at least 12 bytes remaining"}
+	}
+	p.pass.Commands = append(p.pass.Commands, driver.GPUCommand{
+		Kind:   driver.GPUCmdDispatchIndirect,
+		ID:     buf.id,
+		Offset: offset,
+	})
+	return nil
+}
+
+// End finishes the compute pass and appends it to its owning Encoder.
+func (p *ComputePass) End() {
+	if p == nil || p.ended {
+		return
+	}
+	p.ended = true
+	if p.enc != nil && !p.enc.finished {
+		p.enc.passes = append(p.enc.passes, p.pass)
 	}
 }
 
@@ -1199,6 +1447,55 @@ func (d *Device) ReadTexture(tex *Texture, region TextureRegion, fn func(rgba []
 	d.flushOpsOnly()
 }
 
+// ReadBuffer asynchronously copies size bytes from buf starting at offset back
+// to CPU memory and invokes fn on the engine goroutine. If size is 0, it reads
+// from offset to the end of buf. buf must have UsageCopySrc.
+func (d *Device) ReadBuffer(buf *Buffer, offset, size uint64, fn func(data []byte, err error)) {
+	if !d.alive() {
+		if fn != nil {
+			fn(nil, Error{Code: ErrDeviceLost, Message: "device is lost or disposed"})
+		}
+		return
+	}
+	if buf == nil || buf.closed || buf.dev != d {
+		if fn != nil {
+			fn(nil, Error{Code: ErrInvalidDescriptor, Message: "ReadBuffer requires a live Buffer"})
+		}
+		return
+	}
+	if buf.usage&UsageCopySrc == 0 {
+		if fn != nil {
+			fn(nil, Error{Code: ErrInvalidDescriptor, Message: "ReadBuffer requires UsageCopySrc on the buffer"})
+		}
+		return
+	}
+	if offset > buf.size {
+		if fn != nil {
+			fn(nil, Error{Code: ErrInvalidDescriptor, Message: "ReadBuffer offset out of bounds"})
+		}
+		return
+	}
+	if size == 0 {
+		size = buf.size - offset
+	}
+	if offset+size > buf.size {
+		if fn != nil {
+			fn(nil, Error{Code: ErrInvalidDescriptor, Message: "ReadBuffer range out of bounds"})
+		}
+		return
+	}
+	rid := readbackIDGen.Add(1)
+	d.readbacks[rid] = fn
+	d.enqueueOp(driver.GPUResourceOp{
+		Kind:         driver.GPUOpReadBuffer,
+		ID:           buf.id,
+		Offset:       offset,
+		ReadbackID:   rid,
+		ReadbackSize: size,
+	})
+	d.flushOpsOnly()
+}
+
 // ReadSurface asynchronously copies the view's current swapchain color buffer
 // back to CPU RGBA bytes and invokes fn on the engine goroutine.
 func (d *Device) ReadSurface(fn func(rgba []byte, err error)) {
@@ -1247,6 +1544,11 @@ func (f *Frame) Size() (width, height int) { return f.dev.SurfaceSize() }
 // BeginRenderPass starts a RenderPass recorded into this frame.
 func (f *Frame) BeginRenderPass(desc RenderPassDesc) *RenderPass {
 	return f.enc.BeginRenderPass(desc)
+}
+
+// BeginComputePass starts a ComputePass recorded into this frame.
+func (f *Frame) BeginComputePass() *ComputePass {
+	return f.enc.BeginComputePass()
 }
 
 // CopyBufferToBuffer records a buffer copy into this frame.
