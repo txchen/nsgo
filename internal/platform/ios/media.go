@@ -148,10 +148,12 @@ func (s *surface) tick() {
 		s.pullBackResizedScrolls()
 		s.applyAnimated()
 	})
-	if s.animator.Running() || len(s.motions) > 0 {
-		s.staleEffects()
+	if sh := shaders.Load(); sh != nil {
+		if s.animator.Running() || len(s.motions) > 0 {
+			sh.staleEffects(s)
+		}
+		sh.drawShaders(s)
 	}
-	s.drawShaders()
 	if contentAnimated {
 		s.dirtyPictureInPictures()
 	}
@@ -190,7 +192,9 @@ func (s *surface) applyAnimated() {
 	})
 	s.animator.ChangedCanvases(func(id driver.NodeID) {
 		if int(id) < len(s.views) && s.views[id] != nil {
-			s.views[id].redrawAnimated()
+			if ch := canvases.Load(); ch != nil {
+				ch.redrawAnimated(s.views[id])
+			}
 		}
 	})
 	s.animator.ChangedNatives(func(id driver.NodeID, b driver.NativeBinding, num float64, col driver.Color) {
@@ -339,10 +343,14 @@ func (v *view) place(f driver.Bounds) {
 		v.surface.images = append(v.surface.images, v)
 	}
 	if v.video != nil {
-		v.video.Layout()
+		if vh := videos.Load(); vh != nil {
+			vh.layout(v)
+		}
 	}
 	if v.shader != nil {
-		v.sizeShader()
+		if sh := shaders.Load(); sh != nil {
+			sh.sizeShader(v)
+		}
 	}
 	if field := v.surface.accessories[v.id]; field != nil && field.input != nil {
 		// A taller bar shows only once the keyboard asks for it again.

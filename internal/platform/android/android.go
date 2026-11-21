@@ -19,7 +19,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -283,8 +282,12 @@ func (s *surface) serve(app engine.App, opts Options, test *testOpen) {
 			if s.engine != nil {
 				s.engine.Close()
 			}
-			s.canvasRequests.close()
-			s.closeNatives()
+			if cr := canvasReqs.Load(); cr != nil {
+				cr.closeAll(&s.canvasRequests)
+			}
+			if nh := natives.Load(); nh != nil {
+				nh.closeAll(s)
+			}
 			return
 		}
 		r := reader{payload}
@@ -425,9 +428,13 @@ func (s *surface) serve(app engine.App, opts Options, test *testOpen) {
 		case msgRecordingReport:
 			driver.ReportRecording(slices.Clone(payload))
 		case msgCanvasRequest:
-			s.canvasRequest(&r)
+			if cr := canvasReqs.Load(); cr != nil {
+				cr.request(s, &r)
+			}
 		case msgCookiesSet:
-			s.webCookiesSet(&r)
+			if wh := webViews.Load(); wh != nil {
+				wh.cookiesSet(s, &r)
+			}
 		case msgScanReport:
 			s.scanReport(&r)
 		case msgGamepad:
@@ -625,28 +632,6 @@ func (s *surface) unstage(save uint64) {
 
 // dnsServers are the DNS servers the runtime last reported.
 var dnsServers atomic.Pointer[[]string]
-
-// useDNS sends the app's DNS queries to the servers the runtime reports.
-// Android has no resolv.conf, so Go without cgo would ask localhost.
-func useDNS() {
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			servers := dnsServers.Load()
-			if servers == nil || len(*servers) == 0 {
-				return nil, errors.New("android: no DNS servers")
-			}
-			// Go tries its default servers in turn, 127.0.0.1 first:
-			// map that one to our first and the rest to our second.
-			i := 0
-			if address != "127.0.0.1:53" {
-				i = 1
-			}
-			var d net.Dialer
-			return d.DialContext(ctx, network, net.JoinHostPort((*servers)[i%len(*servers)], "53"))
-		},
-	}
-}
 
 func (s *surface) requestText(kind byte, body func(*writer)) ([]byte, bool) {
 	var start time.Time
@@ -989,7 +974,17 @@ func (s *surface) Mount(b *driver.MountBatch) {
 
 // mount sends the batch of v's tree to Java, which names its surface, and loads the image sources it changed.
 func (s *surface) mount(v *treeView, b *driver.MountBatch) {
-	b = withoutOffscreenReleases(s.withoutScans(v.id, s.withoutWebCookies(v.id, s.withoutAuthSessions(v.id, s.withoutPermissions(v.id, s.withoutUpdateChecks(v.id, withoutDesktopItems(withoutEffects(b))))))))
+	if sh := shaders.Load(); sh != nil {
+		b = sh.withoutEffects(b)
+	}
+	b = withoutDesktopItems(b)
+	b = s.withoutUpdateChecks(v.id, b)
+	b = s.withoutPermissions(v.id, b)
+	b = s.withoutAuthSessions(v.id, b)
+	if wh := webViews.Load(); wh != nil {
+		b = wh.withoutCookies(s, v.id, b)
+	}
+	b = withoutOffscreenReleases(s.withoutScans(v.id, b))
 	// Disk space uses a separate message and runs on a worker. Android has no file manager an app can reveal in or trash through. A test's observer may hold the batch, so filter these items from a copy.
 	outsideBatch := func(it driver.MountItem) bool {
 		return it.Kind == driver.ItemRevealFile || it.Kind == driver.ItemTrashFile || it.Kind == driver.ItemDiskSpace
@@ -1007,10 +1002,15 @@ func (s *surface) mount(v *treeView, b *driver.MountBatch) {
 		out.Items = slices.DeleteFunc(slices.Clone(b.Items), outsideBatch)
 		b = &out
 	}
-	s.canvasRequests.update(v.id, b)
+	if cr := canvasReqs.Load(); cr != nil {
+		cr.update(&s.canvasRequests, v.id, b)
+	}
 	var frames []pixelFrame
 	requests, loads := s.trackImages(v, b, &frames)
-	canvases := v.trackCanvasPixels(b, &frames)
+	var canvasesMap map[int][]string
+	if ch := canvases.Load(); ch != nil {
+		canvasesMap = ch.trackPixels(v, b, &frames)
+	}
 	s.stage(v.id, b)
 	for i := range b.Items {
 		it := &b.Items[i]
@@ -1025,14 +1025,21 @@ func (s *surface) mount(v *treeView, b *driver.MountBatch) {
 			}
 		}
 	}
-	natives := s.trackNatives(v.id, b)
+	var nativeItems []nativeItem
+	if nh := natives.Load(); nh != nil {
+		nativeItems = nh.track(s, v.id, b)
+	}
 	first := !v.defaultsSent
 	v.defaultsSent = true
 	for batch := b; ; {
-		shaders, pending := s.trackShaders(v, batch)
+		var shaderItems []shaderItem
+		var pending []driver.MountItem
+		if sh := shaders.Load(); sh != nil {
+			shaderItems, pending = sh.track(s, v, batch)
+		}
 		err := s.sendBatch(frames, func(w *writer) {
 			w.u32(v.id)
-			encode(w, batch, first, requests, natives, shaders, canvases)
+			encode(w, batch, first, requests, nativeItems, shaderItems, canvasesMap)
 		})
 		if err != nil || len(pending) == 0 {
 			break
@@ -1040,7 +1047,7 @@ func (s *surface) mount(v *treeView, b *driver.MountBatch) {
 		// A fresh budget can send at least one deferred copy per batch.
 		// Keep these batches ahead of the next commit to this tree.
 		batch = &driver.MountBatch{Root: b.Root, Items: pending}
-		first, requests, natives, frames, canvases = false, nil, nil, nil, nil
+		first, requests, nativeItems, frames, canvasesMap = false, nil, nil, nil, nil
 	}
 	s.releasePrograms()
 	for _, l := range loads {
@@ -1349,7 +1356,7 @@ var defaults = sync.OnceValue(func() []byte {
 })
 
 // encode writes a batch in the format NsgoView.mount reads, after the surface's ID mount writes: each item is its kind, its ID and the fields of that kind; requests numbers its ItemImage items in order, and natives says what its ItemNative items send. Kinds it does not know, ItemBackUnhandled and the desktop-only ItemMenu, which Java ignores, have no fields, and ItemWindow only an overlay's (writeWindow). The batch's layout animation comes before its items, and the first batch's defaults after it.
-func encode(w *writer, b *driver.MountBatch, first bool, requests []uint32, natives []nativeItem, shaders []shaderItem, canvases map[int][]string) {
+func encode(w *writer, b *driver.MountBatch, first bool, requests []uint32, nativeItems []nativeItem, shaderItems []shaderItem, canvasesMap map[int][]string) {
 	w.u32(uint32(b.Root))
 	writeLayoutAnimation(w, b.LayoutAnimation)
 	w.flags(first)
@@ -1495,16 +1502,20 @@ func encode(w *writer, b *driver.MountBatch, first bool, requests []uint32, nati
 		case driver.ItemCanvas:
 			// The ops' length first: Java keeps them as they are and plays
 			// them on each draw.
-			writeDrawing(w, it.Drawing)
-			keys := canvases[i]
+			if ch := canvases.Load(); ch != nil {
+				ch.write(w, it.Drawing)
+			} else {
+				w.u32(0)
+			}
+			keys := canvasesMap[i]
 			w.u32(uint32(len(keys)))
 			for _, key := range keys {
 				w.str(key)
 			}
 		case driver.ItemShader:
-			if it.Shader != nil && len(shaders) > 0 {
-				writeShader(w, it.Shader, shaders[0])
-				shaders = shaders[1:]
+			if sh := shaders.Load(); sh != nil && it.Shader != nil && len(shaderItems) > 0 {
+				sh.write(w, it.Shader, shaderItems[0])
+				shaderItems = shaderItems[1:]
 			} else {
 				w.u32(0) // no program
 				w.flags(false)
@@ -1670,82 +1681,32 @@ func encode(w *writer, b *driver.MountBatch, first bool, requests []uint32, nati
 			w.u32(uint32(c.TitleView))
 			w.points(c.HeaderHeight)
 		case driver.ItemWeb:
-			c := it.Web
-			w.str(c.Source.Src)
-			w.str(c.Source.HTML)
-			w.str(c.Source.BaseURL)
-			w.str(c.InjectedJavaScript)
-			// WebNode runs its bridge first, so the app's script can post.
-			w.str(c.InjectedJavaScriptBeforeContent)
-			w.str(c.UserAgent)
-			w.str(c.UserAgentSuffix)
-			// Android has no back and forward swipes.
-			w.flags(c.NoScroll, c.NoJavaScript, c.Restricted, c.Incognito, c.Media&driver.WebMicrophone != 0, c.Media&driver.WebCamera != 0, c.PinchZoom)
-			w.str(c.Hosts)
-			w.str(c.Schemes)
-			w.str(c.DownloadDir)
-			w.u32(uint32(len(c.Headers)))
-			for name, value := range c.Headers {
-				w.str(name)
-				w.str(value)
+			if wh := webViews.Load(); wh != nil {
+				wh.writeWeb(w, it.Web)
 			}
 		case driver.ItemVideo:
-			c := it.Video
-			w.str(c.Source)
-			w.flags(c.Paused, c.Muted, c.Repeat, c.Controls)
-			w.float(c.Volume)
-			w.float(c.Rate)
-			w.byte(byte(c.ResizeMode - driver.Cover)) // Java's are 0-based
-			w.u32(uint32(c.ProgressInterval.Milliseconds()))
-			w.byte(byte(c.AudioSession))
-			w.u32(uint32(c.Headers.Len()))
-			for name, value := range c.Headers.All {
-				w.str(name)
-				w.str(value)
+			if vh := videos.Load(); vh != nil {
+				vh.writeVideo(w, it.Video)
 			}
 		case driver.ItemVideoSeek:
-			w.u64(uint64(it.Time.Milliseconds()))
-		case driver.ItemNative:
-			n := natives[0]
-			natives = natives[1:]
-			w.str(n.class)
-			w.u32(uint32(len(n.props)))
-			for _, p := range n.props {
-				w.str(p.Name)
-				w.str(jsonValue(p.Value))
+			if vh := videos.Load(); vh != nil {
+				vh.writeSeek(w, it)
 			}
-			// The props animated nodes drive, when they changed: Java
-			// hands the view their values on the frames they change.
-			w.flags(it.Native.Bind)
-			if it.Native.Bind {
-				w.u32(uint32(len(it.Native.Bindings)))
-				for _, b := range it.Native.Bindings {
-					w.str(b.Name)
-					w.u32(b.Node)
-					w.flags(b.Color)
-				}
+		case driver.ItemNative:
+			n := nativeItems[0]
+			nativeItems = nativeItems[1:]
+			if nh := natives.Load(); nh != nil {
+				nh.writeNative(w, it, n)
 			}
 		case driver.ItemNativeCommand:
-			w.str(it.Value)
-			w.str(jsonValue(it.Data))
+			if nh := natives.Load(); nh != nil {
+				nh.writeCommand(w, it)
+			}
 		case driver.ItemAnimation:
 			writeAnimation(w, it.Animation)
 		case driver.ItemWebCommand:
-			w.byte(byte(it.WebCommand))
-			if it.WebCommand == driver.WebPostMessage {
-				w.str(driver.WebMessageScript(it.Value))
-			} else if it.WebCommand == driver.WebLoad {
-				if src, ok := it.Data.(*driver.WebSource); ok && src != nil {
-					w.str(src.Src)
-					w.str(src.HTML)
-					w.str(src.BaseURL)
-				} else {
-					w.str("")
-					w.str("")
-					w.str("")
-				}
-			} else {
-				w.str(it.Value)
+			if wh := webViews.Load(); wh != nil {
+				wh.writeCommand(w, it)
 			}
 		}
 	}

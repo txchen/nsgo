@@ -84,12 +84,12 @@ type view struct {
 	bar         *navBar // a screen's system header
 	// headerWrap holds a header view in its screen's bar.
 	headerWrap objc.ID
-	drawing    *driver.Drawing    // a canvas's
-	played     []driver.DrawOp    // the ops it last drew, its bound arguments' values in place
-	shader     *apple.ShaderLayer // a shader view's (shader.go)
-	container  objc.ID            // what holds its children under an effect or for its clip, once it has one
-	clipHeld   bool               // whether container clips the children in place of the view's own layer, which keeps its shadow and outline (clipsInHolder)
-	web        *apple.Web         // a web view's
+	drawing    *driver.Drawing // a canvas's
+	played     []driver.DrawOp // the ops it last drew, its bound arguments' values in place
+	shader     any             // *apple.ShaderLayer, a shader view's (shader.go)
+	container  objc.ID         // what holds its children under an effect or for its clip, once it has one
+	clipHeld   bool            // whether container clips the children in place of the view's own layer, which keeps its shadow and outline (clipsInHolder)
+	web        *apple.Web      // a web view's
 	pip        *apple.PictureInPicture
 	video      *apple.Video // a video's
 
@@ -371,7 +371,6 @@ func loadUIKit() {
 	registerNav()
 	registerSelection()
 	registerContent()
-	registerCanvasNodes()
 	classView = register("NsgoView", uiView, nil, slices.Concat(common, pressMethods()))
 	registerTextInput(slices.Concat(common, pressMethods()))
 	surfaceMethods = append(common,
@@ -1162,7 +1161,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 					if v.pip != nil {
 						v.pip.Command(it.Count)
 					} else if v.video != nil {
-						v.video.PictureInPictureCommand(it.Count)
+						if vh := videos.Load(); vh != nil {
+							vh.pipCommand(v, it.Count)
+						}
 					}
 				}
 			}
@@ -1192,7 +1193,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 			apple.HandleSpeak(it.Count, *it.Speak, s.engine.Dispatch)
 			continue
 		case driver.ItemWebCookies:
-			apple.WebCookies(it.Count, *it.Cookies, s.engine.Dispatch)
+			if wh := webViews.Load(); wh != nil {
+				wh.cookies(it.Count, *it.Cookies, s.engine.Dispatch)
+			}
 			continue
 		case driver.ItemAudio:
 			if s.audio == nil {
@@ -1234,7 +1237,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 			s.releaseAwake(it.Count)
 			continue
 		case driver.ItemReleaseOffscreen:
-			apple.ReleaseOffscreen(it.OffscreenID)
+			if ch := canvases.Load(); ch != nil {
+				ch.releaseOffscreen(it.OffscreenID)
+			}
 			continue
 		case driver.ItemNotificationPermission, driver.ItemShowNotification, driver.ItemCloseNotification, driver.ItemBadge, driver.ItemTaskProgress,
 			driver.ItemBiometricAvailability, driver.ItemBiometricAuthenticate:
@@ -1316,11 +1321,15 @@ func (s *surface) apply(b *driver.MountBatch) {
 			continue
 		case driver.ItemKeepImage:
 			if !s.closed {
-				apple.KeepCanvasImage(s, it.Value)
+				if ch := canvases.Load(); ch != nil {
+					ch.keepImage(s, it.Value)
+				}
 			}
 			continue
 		case driver.ItemReleaseImage:
-			apple.ReleaseCanvasImage(s, it.Value)
+			if ch := canvases.Load(); ch != nil {
+				ch.releaseImage(s, it.Value)
+			}
 			continue
 		case driver.ItemAnnounce:
 			uiAccessibilityPost(announcement, apple.NSString(it.Value))
@@ -1460,9 +1469,13 @@ func (s *surface) apply(b *driver.MountBatch) {
 				s.oriented = append(s.oriented, v)
 			}
 		case driver.ItemWeb:
-			v.web.Configure(it.Web)
+			if wh := webViews.Load(); wh != nil {
+				wh.configure(v, it.Web)
+			}
 		case driver.ItemWebCommand:
-			v.web.Command(it.WebCommand, it.Value, it.Data)
+			if wh := webViews.Load(); wh != nil {
+				wh.command(v, it)
+			}
 		case driver.ItemPictureInPicture:
 			if v.pip == nil {
 				v.pip = apple.NewPictureInPicture(0, v.report)
@@ -1476,33 +1489,40 @@ func (s *surface) apply(b *driver.MountBatch) {
 			}
 			v.pip.Configure(*it.PictureInPicture)
 		case driver.ItemVideo:
-			v.video.Configure(it.Video)
+			if vh := videos.Load(); vh != nil {
+				vh.configure(v, it.Video)
+			}
 		case driver.ItemVideoSeek:
-			v.video.Seek(it.Time)
+			if vh := videos.Load(); vh != nil {
+				vh.seek(v, it.Time)
+			}
 		case driver.ItemNative:
-			s.configureNative(v, it.Native)
+			if nh := natives.Load(); nh != nil {
+				nh.configure(s, v, it.Native)
+			}
 		case driver.ItemNativeCommand:
-			if v.component != nil {
-				v.component.Command(it.Value, it.Data)
+			if nh := natives.Load(); nh != nil {
+				nh.command(v, it.Value, it.Data)
 			}
 		case driver.ItemCanvas:
-			v.drawing = it.Drawing
-			v.played = v.played[:0] // drawn whole first
-			s.animator.BindCanvas(v.id, it.Drawing.Slots)
-			v.setCanvasNodes(it.Drawing.Nodes)
-			v.redraw()
+			if ch := canvases.Load(); ch != nil {
+				ch.apply(s, v, it.Drawing)
+			}
 		case driver.ItemShader:
-			if v.kind == driver.KindShader && it.Shader != nil && it.Shader.Role == driver.ShaderFill {
-				s.setShader(v, it.Shader)
-			} else {
-				s.setEffect(v, it.Shader)
+			if sh := shaders.Load(); sh != nil {
+				if v.kind == driver.KindShader && it.Shader != nil && it.Shader.Role == driver.ShaderFill {
+					sh.setShader(s, v, it.Shader)
+				} else {
+					sh.setEffect(s, v, it.Shader)
+				}
 			}
 		case driver.ItemShaderTransition:
-			s.startTransition(v)
+			if sh := shaders.Load(); sh != nil {
+				sh.startTransition(s, v)
+			}
 		case driver.ItemShaderInput:
-			if fx := s.effects.Get(v); fx != nil {
-				fx.Invalidate()
-				s.shadeLater(v)
+			if sh := shaders.Load(); sh != nil {
+				sh.shaderInput(s, v)
 			}
 		case driver.ItemScrollTo:
 			start, end := scrollLimits(v.native)
@@ -1611,7 +1631,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 		s.pullBackResizedScrolls()
 		s.applyAnimated()
 	})
-	s.drawShaders()
+	if sh := shaders.Load(); sh != nil {
+		sh.drawShaders(s)
+	}
 	s.dirtyPictureInPictures()
 	if s.animator.Running() {
 		s.startTicking()
@@ -1673,15 +1695,17 @@ func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
 		v.image.Dispatch = v.report
 		v.image.Changed = s.dirtyPictureInPictures
 	case driver.KindWeb:
-		v.web = apple.NewWeb(v.native)
-		v.web.Dispatch = v.report
+		if wh := webViews.Load(); wh != nil {
+			wh.create(v)
+		}
 	case driver.KindVideo:
-		v.video = apple.NewVideo(v.native)
-		v.video.Dispatch = v.report
-		v.video.Parent = s.viewController()
-		v.native.Send(sel("setClipsToBounds:"), true)
+		if vh := videos.Load(); vh != nil {
+			vh.create(s, v)
+		}
 	case driver.KindShader:
-		v.newShader()
+		if sh := shaders.Load(); sh != nil {
+			sh.newView(v)
+		}
 	}
 	if kind == driver.KindText {
 		v.updateAccessibility() // a text is an element without props
@@ -1692,7 +1716,9 @@ func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
 
 // delete releases v; kept leaves its native where it is, going away.
 func (s *surface) delete(v *view, kept bool) {
-	v.releaseCanvasNodes()
+	if ch := canvases.Load(); ch != nil {
+		ch.releaseView(v)
+	}
 	if v.tsel != nil {
 		v.resignText()
 		v.tsel = nil
@@ -1732,8 +1758,9 @@ func (s *surface) delete(v *view, kept bool) {
 	s.animator.Forget(v.id)
 	delete(s.motions, v)
 	if v.component != nil {
-		v.component.Close()
-		v.component = nil
+		if nh := natives.Load(); nh != nil {
+			nh.close(v)
+		}
 	}
 	if in := s.accessories[v.id]; in != nil {
 		s.setAccessory(in, 0)
@@ -1750,7 +1777,9 @@ func (s *surface) delete(v *view, kept bool) {
 		v.image.Close()
 	}
 	if v.web != nil {
-		v.web.Close()
+		if wh := webViews.Load(); wh != nil {
+			wh.close(v)
+		}
 	}
 	if v.pip != nil {
 		v.pip.Close(nil)
@@ -1758,15 +1787,16 @@ func (s *surface) delete(v *view, kept bool) {
 		s.pips = slices.DeleteFunc(s.pips, func(p *view) bool { return p == v })
 	}
 	if v.video != nil {
-		v.video.Close()
+		if vh := videos.Load(); vh != nil {
+			vh.close(v)
+		}
 	}
-	s.endEffect(v)
+	if sh := shaders.Load(); sh != nil {
+		sh.release(s, v)
+	}
 	if v.container != 0 {
 		apple.ForgetHolder(v.container.Send(selLayer))
 		delete(views, v.container)
-	}
-	if v.shader != nil {
-		v.shader.Release()
 	}
 	delete(views, v.native)
 	if v.input != nil {

@@ -5,10 +5,28 @@ package harmonyos
 import (
 	"encoding/base64"
 	"encoding/json"
+	"sync/atomic"
 
 	"github.com/nsgo-dev/nsgo/internal/driver"
 	"github.com/nsgo-dev/nsgo/internal/platform/webstyle"
 )
+
+var canvasEncoder atomic.Pointer[func([]driver.DrawOp) string]
+
+func (*surface) EnableCanvas() {
+	if canvasEncoder.Load() != nil {
+		return
+	}
+	fn := canvasJSON
+	canvasEncoder.Store(&fn)
+}
+
+func encodeCanvas(ops []driver.DrawOp) string {
+	if fn := canvasEncoder.Load(); fn != nil {
+		return (*fn)(ops)
+	}
+	return "[]"
+}
 
 // canvasOp is one drawing operation as the host replays it into a
 // CanvasRenderingContext2D. Short keys and omitted zero fields keep a

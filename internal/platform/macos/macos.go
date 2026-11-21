@@ -145,8 +145,8 @@ type view struct {
 	transform driver.Transform      // AppKit drops it when the frame changes
 	drawing   *driver.Drawing       // a canvas's
 	played    []driver.DrawOp       // the ops it last drew, its bound arguments' values in place
-	canvas    canvasPaint           // how it paints (content.go)
-	shader    *apple.ShaderLayer    // a shader view's (shader.go)
+	canvas    any                   // *canvasPaint, how it paints (content.go)
+	shader    any                   // *apple.ShaderLayer, a shader view's (shader.go)
 	web       *apple.Web            // a web view's
 	video     *apple.Video          // a video's
 
@@ -561,7 +561,9 @@ func loadAppKit() {
 		Fn: func(self objc.ID, _ objc.SEL, path, object, change objc.ID, ctx uintptr) {
 			if apple.GoString(path) == "firstResponder" {
 				if v := views[objc.ID(ctx)]; v != nil {
-					v.surface.reportWebFocus()
+					if wh := webViews.Load(); wh != nil {
+						wh.reportFocus(v.surface)
+					}
 				}
 				return
 			}
@@ -592,7 +594,6 @@ func loadAppKit() {
 	))
 	registerInput()
 	registerContent()
-	registerCanvasNodes()
 	registerQuickLook()
 	classMenuTarget = register("NsgoMenuTarget", apple.Class("NSObject"), nil, []objc.MethodDef{
 		{Cmd: selMenuChosen, Fn: menuChosen},
@@ -765,7 +766,9 @@ func surfaceMoved(self objc.ID, cmd objc.SEL) {
 	}
 	s.window = window
 	if s.engine != nil {
-		s.observeWebFocus()
+		if wh := webViews.Load(); wh != nil {
+			wh.observeFocus(s)
+		}
 	}
 	if s.window == 0 {
 		return
@@ -1023,7 +1026,9 @@ func (s *surface) close() {
 		}
 	}
 	s.awake.releaseAll()
-	apple.ReleaseCanvasImages(s)
+	if ch := canvases.Load(); ch != nil {
+		ch.releaseSurface(s)
+	}
 	s.loopback.Close()
 	if s.audio != nil {
 		s.audio.Close()
@@ -1326,7 +1331,9 @@ func (s *surface) reportFrameWindow(env driver.Environment) {
 // key and mouse events.
 func (s *surface) observe() {
 	observeApp()
-	s.observeWebFocus()
+	if wh := webViews.Load(); wh != nil {
+		wh.observeFocus(s)
+	}
 	s.stops = append(s.stops, func() {
 		if s.stopWebFocus != nil {
 			s.stopWebFocus()
@@ -2094,7 +2101,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 			apple.HandleSpeak(it.Count, *it.Speak, s.engine.Dispatch)
 			continue
 		case driver.ItemWebCookies:
-			apple.WebCookies(it.Count, *it.Cookies, s.engine.Dispatch)
+			if wh := webViews.Load(); wh != nil {
+				wh.cookies(it.Count, *it.Cookies, s.engine.Dispatch)
+			}
 			continue
 		case driver.ItemAudio:
 			if s.audio == nil {
@@ -2158,7 +2167,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 			s.awake.release(it.Count)
 			continue
 		case driver.ItemReleaseOffscreen:
-			apple.ReleaseOffscreen(it.OffscreenID)
+			if ch := canvases.Load(); ch != nil {
+				ch.releaseOffscreen(it.OffscreenID)
+			}
 			continue
 		case driver.ItemPickImages:
 			s.pickImages(*it.Pick, it.Count)
@@ -2266,11 +2277,15 @@ func (s *surface) apply(b *driver.MountBatch) {
 			continue
 		case driver.ItemKeepImage:
 			if !s.closed {
-				apple.KeepCanvasImage(s, it.Value)
+				if ch := canvases.Load(); ch != nil {
+					ch.keepImage(s, it.Value)
+				}
 			}
 			continue
 		case driver.ItemReleaseImage:
-			apple.ReleaseCanvasImage(s, it.Value)
+			if ch := canvases.Load(); ch != nil {
+				ch.releaseImage(s, it.Value)
+			}
 			continue
 		case driver.ItemAnnounce:
 			announce(it.Value)
@@ -2360,50 +2375,48 @@ func (s *surface) apply(b *driver.MountBatch) {
 		case driver.ItemModal:
 			v.animation = it.Modal.Animation
 		case driver.ItemWeb:
-			delete(views, v.web.View())
-			v.web.Configure(it.Web)
-			views[v.web.View()] = v
-		case driver.ItemWebCommand:
-			if in, ok := it.Data.(*driver.WebInput); ok && it.WebCommand == driver.WebSendInput {
-				if web := v.web.View(); web != 0 {
-					sendWebInput(web, *in)
-				}
-				break
+			if wh := webViews.Load(); wh != nil {
+				wh.configure(v, it.Web)
 			}
-			v.web.Command(it.WebCommand, it.Value, it.Data)
+		case driver.ItemWebCommand:
+			if wh := webViews.Load(); wh != nil {
+				wh.command(v, it)
+			}
 		case driver.ItemVideo:
-			delete(views, v.video.View())
-			v.video.Configure(it.Video)
-			if shown := v.video.View(); shown != 0 {
-				views[shown] = v
+			if vh := videos.Load(); vh != nil {
+				vh.configure(v, it.Video)
 			}
 		case driver.ItemVideoSeek:
-			v.video.Seek(it.Time)
+			if vh := videos.Load(); vh != nil {
+				vh.seek(v, it.Time)
+			}
 		case driver.ItemNative:
-			s.configureNative(v, it.Native)
+			if nh := natives.Load(); nh != nil {
+				nh.configure(s, v, it.Native)
+			}
 		case driver.ItemNativeCommand:
-			if v.component != nil {
-				v.component.Command(it.Value, it.Data)
+			if nh := natives.Load(); nh != nil {
+				nh.command(v, it.Value, it.Data)
 			}
 		case driver.ItemCanvas:
-			v.drawing = it.Drawing
-			v.played = v.played[:0] // drawn whole first
-			v.canvas.set(it.Drawing)
-			s.animator.BindCanvas(v.id, it.Drawing.Slots)
-			v.setCanvasNodes(it.Drawing.Nodes)
-			v.redraw()
+			if ch := canvases.Load(); ch != nil {
+				ch.apply(s, v, it.Drawing)
+			}
 		case driver.ItemShader:
-			if v.kind == driver.KindShader && it.Shader != nil && it.Shader.Role == driver.ShaderFill {
-				s.setShader(v, it.Shader)
-			} else {
-				s.setEffect(v, it.Shader)
+			if sh := shaders.Load(); sh != nil {
+				if v.kind == driver.KindShader && it.Shader != nil && it.Shader.Role == driver.ShaderFill {
+					sh.setShader(s, v, it.Shader)
+				} else {
+					sh.setEffect(s, v, it.Shader)
+				}
 			}
 		case driver.ItemShaderTransition:
-			s.startTransition(v)
+			if sh := shaders.Load(); sh != nil {
+				sh.startTransition(s, v)
+			}
 		case driver.ItemShaderInput:
-			if fx := s.effects.Get(v); fx != nil {
-				fx.Invalidate()
-				s.shadeLater(v)
+			if sh := shaders.Load(); sh != nil {
+				sh.shaderInput(s, v)
 			}
 		case driver.ItemScrollTo:
 			if v.sc != nil {
@@ -2498,7 +2511,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 		}
 		s.applyAnimated()
 	})
-	s.drawShaders()
+	if sh := shaders.Load(); sh != nil {
+		sh.drawShaders(s)
+	}
 	if s.animator.Running() {
 		s.startTicking()
 	}
@@ -2565,13 +2580,17 @@ func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
 		v.image.Dispatch = v.report
 		v.image.AlphaChanged = func() { v.surface.pointer.tested = false }
 	case driver.KindWeb:
-		v.web = apple.NewWeb(v.native)
-		v.web.Dispatch = v.report
+		if wh := webViews.Load(); wh != nil {
+			wh.create(v)
+		}
 	case driver.KindVideo:
-		v.video = apple.NewVideo(v.native)
-		v.video.Dispatch = v.report
+		if vh := videos.Load(); vh != nil {
+			vh.create(v)
+		}
 	case driver.KindShader:
-		v.newShader()
+		if sh := shaders.Load(); sh != nil {
+			sh.newView(v)
+		}
 	case driver.KindText:
 		v.updateAccessibility() // a text is an element without props
 	}
@@ -2595,18 +2614,20 @@ func (s *surface) delete(v *view, kept bool) {
 		s.dragTarget = nil
 	}
 	if v.component != nil {
-		v.component.Close()
-		v.component = nil
+		if nh := natives.Load(); nh != nil {
+			nh.close(v)
+		}
 	}
 	apple.ForgetTransform(v.native.Send(selLayer))
 	apple.ForgetDecor(v.native.Send(selLayer))
 	v.forgetContent()
-	v.releaseCanvasNodes()
-	v.releaseAXBar()
-	if v.shader != nil {
-		v.shader.Release()
+	if ch := canvases.Load(); ch != nil {
+		ch.releaseView(v)
 	}
-	s.endEffect(v)
+	v.releaseAXBar()
+	if sh := shaders.Load(); sh != nil {
+		sh.release(s, v)
+	}
 	if v.content != v.native {
 		apple.ForgetHolder(v.content.Send(selLayer))
 		if v.sc == nil {
@@ -2618,12 +2639,14 @@ func (s *surface) delete(v *view, kept bool) {
 		v.image.Close()
 	}
 	if v.web != nil {
-		delete(views, v.web.View())
-		v.web.Close()
+		if wh := webViews.Load(); wh != nil {
+			wh.close(v)
+		}
 	}
 	if v.video != nil {
-		delete(views, v.video.View())
-		v.video.Close()
+		if vh := videos.Load(); vh != nil {
+			vh.close(v)
+		}
 	}
 	if v.hover != 0 {
 		v.hover.Send(selRelease)

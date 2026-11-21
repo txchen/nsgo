@@ -118,7 +118,7 @@ func (m *mounter) applyAnimated() bool {
 	})
 	m.anim.ChangedCanvases(func(id driver.NodeID) {
 		if v := m.views[id]; v != nil && v.drawing != nil {
-			m.o.op("cv", id).str(canvasJSON(m.anim.CanvasOps(id, v.drawing)))
+			m.o.op("cv", id).str(encodeCanvas(m.anim.CanvasOps(id, v.drawing)))
 			changed = true
 		}
 	})
@@ -194,7 +194,7 @@ func (m *mounter) item(b *driver.MountBatch, it *driver.MountItem) {
 				ops = m.anim.CanvasOps(it.ID, it.Drawing)
 			}
 		}
-		m.o.op("cv", it.ID).str(canvasJSON(ops))
+		m.o.op("cv", it.ID).str(encodeCanvas(ops))
 	case driver.ItemImage:
 		src, fit, data := "", "cover", ""
 		if it.Image != nil {

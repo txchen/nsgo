@@ -212,8 +212,8 @@ func (w *window) retireInner(v *view) {
 		w.focus = nil
 		gtkWindowSetFocus(w.toplevel(), 0)
 	}
-	if v.video != nil {
-		w.stopProgress(v.video)
+	if vh := videos.Load(); vh != nil {
+		vh.stopProgress(w, v)
 	}
 }
 

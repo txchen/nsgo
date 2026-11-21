@@ -38,11 +38,13 @@ func (s *surface) tick(stamp time.Duration) {
 	s.ticking = false
 	s.animator.Step(stamp)
 	s.applyAnimated()
-	if s.animator.Running() {
-		s.staleEffects()
+	if sh := shaders.Load(); sh != nil {
+		if s.animator.Running() {
+			sh.staleEffects(s)
+		}
+		sh.changedShaders(s)
+		sh.drawShaders(s)
 	}
-	s.changedShaders()
-	s.drawShaders()
 	if s.frameWanted {
 		s.frameWanted = false
 		if s.engine != nil {
@@ -100,8 +102,12 @@ func (s *surface) applyAnimated() {
 		}
 		v.css().set(style)
 	})
-	s.changedCanvases()
-	s.changedNatives()
+	if ch := canvases.Load(); ch != nil {
+		ch.changedCanvases(s)
+	}
+	if nh := natives.Load(); nh != nil {
+		nh.changedNatives(s)
+	}
 	s.replaceBound()
 }
 

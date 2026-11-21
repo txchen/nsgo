@@ -682,7 +682,9 @@ func (w *window) stop() {
 	if !w.closing {
 		w.engine.Close()
 	}
-	w.closeNatives()
+	if nh := natives.Load(); nh != nil {
+		nh.closeAll(w)
+	}
 	w.closeEditors()
 	// The windows the app opened that are still open go with it as WindowDestroy takes them, which a stopped engine no longer sends: left, their editors' CSS providers stay on the whole display.
 	windowHandles.Range(func(_, value any) bool {
@@ -871,7 +873,9 @@ func (w *window) shutdown(forced bool) {
 	w.closeAudio()
 	w.discovery.close()
 	w.releasePointer(false)
-	w.closeCanvasImages()
+	if ch := canvases.Load(); ch != nil {
+		ch.closeWindow(w)
+	}
 	w.closeHotKeys()
 
 	w.cancelColorPick()
@@ -1036,7 +1040,9 @@ func (w *window) apply(b *driver.MountBatch) {
 			w.discovery.handle(it, w.engine.Dispatch)
 			continue
 		case driver.ItemWebCookies:
-			w.webCookies(it.Count, *it.Cookies)
+			if wh := webViews.Load(); wh != nil {
+				wh.cookies(w, it.Count, *it.Cookies)
+			}
 			continue
 		case driver.ItemNotificationPermission, driver.ItemShowNotification, driver.ItemCloseNotification, driver.ItemBadge, driver.ItemTaskProgress:
 			w.notify(it)
@@ -1056,7 +1062,9 @@ func (w *window) apply(b *driver.MountBatch) {
 			w.releaseAwake(it.Count)
 			continue
 		case driver.ItemReleaseOffscreen:
-			w.releaseOffscreen(it.OffscreenID)
+			if ch := canvases.Load(); ch != nil {
+				ch.releaseOffscreen(w, it.OffscreenID)
+			}
 			continue
 		case driver.ItemCheckForUpdates:
 			w.checkForUpdates(it.Count)
@@ -1161,10 +1169,14 @@ func (w *window) apply(b *driver.MountBatch) {
 			w.imageInfo(it)
 			continue
 		case driver.ItemKeepImage:
-			w.keepCanvasImage(it.Value)
+			if ch := canvases.Load(); ch != nil {
+				ch.keepImage(w, it.Value)
+			}
 			continue
 		case driver.ItemReleaseImage:
-			w.releaseCanvasImage(it.Value)
+			if ch := canvases.Load(); ch != nil {
+				ch.releaseImage(w, it.Value)
+			}
 			continue
 		case driver.ItemKeymap:
 			w.setKeymap(it.Keys)
@@ -1267,7 +1279,9 @@ func (w *window) apply(b *driver.MountBatch) {
 			if v.entry != 0 {
 				w.styleEntry(v)
 			}
-			w.webBackground(v)
+			if wh := webViews.Load(); wh != nil {
+				wh.background(w, v)
+			}
 			if v.kind == driver.KindImage {
 				w.playImage(v) // again once it is no longer tinted
 			}
@@ -1332,35 +1346,50 @@ func (w *window) apply(b *driver.MountBatch) {
 			// comes in as it is first inserted (present).
 			v.modal = it.Modal.Animation
 		case driver.ItemCanvas:
-			w.setCanvas(v, it.Drawing)
-			w.setCanvasParts(v, it.Drawing.Nodes)
+			if ch := canvases.Load(); ch != nil {
+				ch.setCanvas(w, v, it.Drawing)
+			}
 		case driver.ItemShader:
-			if v.kind == driver.KindShader && it.Shader != nil && it.Shader.Role == driver.ShaderFill {
-				w.setShader(v, it.Shader)
-			} else {
-				w.setEffect(v, it.Shader)
+			if sh := shaders.Load(); sh != nil {
+				if v.kind == driver.KindShader && it.Shader != nil && it.Shader.Role == driver.ShaderFill {
+					sh.setShader(w, v, it.Shader)
+				} else {
+					sh.setEffect(w, v, it.Shader)
+				}
 			}
 		case driver.ItemShaderTransition:
-			w.startTransition(v)
+			if sh := shaders.Load(); sh != nil {
+				sh.startTransition(w, v)
+			}
 		case driver.ItemShaderInput:
 			if v.fx != nil {
-				w.redrawEffect(v)
+				if sh := shaders.Load(); sh != nil {
+					sh.redrawEffect(w, v)
+				}
 			}
 		case driver.ItemWeb:
-			w.configureWeb(v, it.Web)
+			if wh := webViews.Load(); wh != nil {
+				wh.configure(w, v, it.Web)
+			}
 		case driver.ItemWebCommand:
-			w.webCommand(v, it.WebCommand, it.Value, it.Data)
+			if wh := webViews.Load(); wh != nil {
+				wh.command(w, v, it.WebCommand, it.Value, it.Data)
+			}
 		case driver.ItemVideo:
-			w.configureVideo(v, it.Video)
+			if vh := videos.Load(); vh != nil {
+				vh.configure(w, v, it.Video)
+			}
 		case driver.ItemVideoSeek:
-			if v.video != nil {
-				v.video.seek(it.Time)
+			if vh := videos.Load(); vh != nil {
+				vh.seek(v, it.Time)
 			}
 		case driver.ItemNative:
-			w.configureNative(v, it.Native)
+			if nh := natives.Load(); nh != nil {
+				nh.configure(w, v, it.Native)
+			}
 		case driver.ItemNativeCommand:
-			if v.native != nil && v.native.comp != nil {
-				v.native.comp.Command(it.Value, it.Data)
+			if nh := natives.Load(); nh != nil {
+				nh.command(v, it.Value, it.Data)
 			}
 		case driver.ItemScrollBy:
 			v.applied++
@@ -1452,7 +1481,9 @@ func (w *window) setRoot(id driver.NodeID) {
 // delete drops v and its subtree. The engine deletes the children too,
 // so they are detached but their own items release what they hold.
 func (w *window) delete(v *view) {
-	w.endEffect(v)
+	if sh := shaders.Load(); sh != nil {
+		sh.release(w, v)
+	}
 	w.forgetDestination(v)
 	w.hovered.Forget(v.id)
 	if w.cursorText == v {
@@ -1463,30 +1494,26 @@ func (w *window) delete(v *view) {
 		c.parent = nil
 	}
 	v.children = nil
-	v.releaseCanvasParts()
 	if v.text != nil {
 		v.text.Release()
 		v.text = nil
 	}
 	w.releaseEditor(v)
-	if v.web != nil {
-		w.closeWeb(v)
+	if wh := webViews.Load(); wh != nil {
+		wh.close(w, v)
 	}
-	if v.video != nil {
-		w.closeVideo(v)
+	if vh := videos.Load(); vh != nil {
+		vh.close(w, v)
 	}
-	if v.native != nil {
-		w.closeNative(v)
-	}
-	if v.shader != nil {
-		w.unhost(v, &v.shader.hosted)
-		v.shader = nil
+	if nh := natives.Load(); nh != nil {
+		nh.closeView(w, v)
 	}
 	v.source.reset(driver.ImageSource{})
 	v.placeholder.reset(driver.ImageSource{})
 	w.dropWidget(v)
-	v.canvas.raster.release()
-	v.canvas.raster = nil
+	if ch := canvases.Load(); ch != nil {
+		ch.releaseView(v)
+	}
 	v.deleted, v.dying, v.layout, v.animated = true, false, nil, nil
 	if w.views[v.id] == v {
 		w.views[v.id] = nil

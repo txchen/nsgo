@@ -257,10 +257,12 @@ func (s *surface) tick(period time.Duration, linked bool) {
 		s.stepMotions(now)
 		s.applyAnimated()
 	})
-	if dirty || selecting {
-		s.staleEffects()
+	if sh := shaders.Load(); sh != nil {
+		if dirty || selecting {
+			sh.staleEffects(s)
+		}
+		sh.drawShaders(s)
 	}
-	s.drawShaders()
 	s.startImages()
 	if len(s.motions) > 0 {
 		s.revisit()
@@ -317,7 +319,9 @@ func (s *surface) applyAnimated() {
 	})
 	s.animator.ChangedCanvases(func(id driver.NodeID) {
 		if int(id) < len(s.views) && s.views[id] != nil {
-			s.views[id].redrawAnimated()
+			if ch := canvases.Load(); ch != nil {
+				ch.redrawAnimated(s.views[id])
+			}
 		}
 	})
 	s.animator.ChangedNatives(func(id driver.NodeID, b driver.NativeBinding, num float64, col driver.Color) {
