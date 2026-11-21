@@ -36,6 +36,8 @@ type signing struct {
 	// WidgetsProfile is the provisioning profile of the iOS package's
 	// widget extension, <id>.widgets, granting the app group.
 	WidgetsProfile string `yaml:"widgets_profile"`
+	// AssetPacksProfile signs the iOS Background Assets downloader extension.
+	AssetPacksProfile string `yaml:"asset_packs_profile"`
 	// ClipProfile is the provisioning profile of the iOS package's App
 	// Clip, app_clip.id.
 	ClipProfile string `yaml:"clip_profile"`
@@ -240,6 +242,12 @@ func signForStore(ctx context.Context, p *project, app string) error {
 	if groups, _ := entitlements["com.apple.security.application-groups"].([]any); p.iosExtension() && !slices.Contains(groups, any(p.appGroup())) {
 		return fmt.Errorf("the provisioning profile does not grant the app group %s, which the app shares with its widgets", p.appGroup())
 	}
+	if _, err := os.Stat(assetDownloaderAppex(app)); err == nil {
+		groups, _ := entitlements["com.apple.security.application-groups"].([]any)
+		if !slices.Contains(groups, any(p.appGroup())) {
+			return fmt.Errorf("sign.profile does not grant %s, which the app shares with its Background Assets downloader", p.appGroup())
+		}
+	}
 	if _, ok := entitlements["com.apple.developer.associated-appclip-app-identifiers"]; p.AppClip != nil && !ok {
 		return fmt.Errorf("the provisioning profile does not tie %s to its App Clip: add the clip's target to the App ID's App Clip capability", p.ID)
 	}
@@ -269,6 +277,9 @@ func signForStore(ctx context.Context, p *project, app string) error {
 		return err
 	}
 	if err := signIOSClip(ctx, p, app, identity); err != nil {
+		return err
+	}
+	if err := signIOSAssetDownloader(ctx, p, app, identity); err != nil {
 		return err
 	}
 	return run(ctx, "codesign", "--force", "--sign", identity, "--entitlements", ents, "--generate-entitlement-der", app)
