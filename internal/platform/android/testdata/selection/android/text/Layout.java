@@ -2,10 +2,10 @@ package android.text;
 
 /** A single line with ten points per UTF-16 code unit. */
 public final class Layout {
-    private final String text;
+    private final CharSequence text;
     private final int width, height;
 
-    public Layout(String text, int width, int height) {
+    public Layout(CharSequence text, int width, int height) {
         this.text = text;
         this.width = width;
         this.height = height;

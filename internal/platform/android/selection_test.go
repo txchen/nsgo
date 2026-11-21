@@ -20,14 +20,16 @@ const (
 type selectionFixture struct {
 	content string
 	frame   driver.Bounds
+	spans   []driver.TextSpan
 }
 
 type selectionFixtures []selectionFixture
 
-func (f selectionFixtures) Len() int                  { return len(f) }
-func (f selectionFixtures) Content(i int) string      { return f[i].content }
-func (f selectionFixtures) Frame(i int) driver.Bounds { return f[i].frame }
-func (f selectionFixtures) Key(i int) uint64          { return uint64(i + 1) }
+func (f selectionFixtures) Len() int                      { return len(f) }
+func (f selectionFixtures) Content(i int) string          { return f[i].content }
+func (f selectionFixtures) Frame(i int) driver.Bounds     { return f[i].frame }
+func (f selectionFixtures) Key(i int) uint64              { return uint64(i + 1) }
+func (f selectionFixtures) Spans(i int) []driver.TextSpan { return f[i].spans }
 
 func (f selectionFixtures) OffsetAt(i int, p driver.Point) int {
 	// The JVM fixture lays one UTF-16 code unit in ten points.
@@ -35,13 +37,17 @@ func (f selectionFixtures) OffsetAt(i int, p driver.Point) int {
 }
 
 func TestSelectionMatchesJava(t *testing.T) {
-	fixture := func(content string, x, y driver.Points) selectionFixture {
+	fixture := func(content string, x, y driver.Points, spans ...driver.TextSpan) selectionFixture {
 		return selectionFixture{content, driver.Bounds{
 			Origin: driver.Point{X: x, Y: y},
 			Size:   driver.Size{Width: driver.Points(len(utf16.Encode([]rune(content))) * 10), Height: 20},
-		}}
+		}, spans}
 	}
-	nodes := selectionFixtures{fixture("alpha beta", 0, 0), fixture("pi 🚀", 150, 0), fixture("next\uFFFC row", 0, 40)}
+	nodes := selectionFixtures{
+		fixture("alpha beta", 0, 0, driver.TextSpan{Start: 6, End: 10, Hidden: true}),
+		fixture("pi 🚀 ok", 150, 0, driver.TextSpan{Start: 3, End: 3 + len("🚀"), Hidden: true}),
+		fixture("next\uFFFC row", 0, 40, driver.TextSpan{Start: 0, End: 4, Hidden: true}),
+	}
 	steps := []struct {
 		name string
 		op   byte
@@ -49,8 +55,9 @@ func TestSelectionMatchesJava(t *testing.T) {
 	}{
 		{"empty", selectionClear, 0, 0},
 		{"word", selectionWord, 16, 5},
+		{"extend into hidden word", selectionEnd, 80, 5},
 		{"extend into a surrogate pair", selectionEnd, 185, 5},
-		{"extend across an emoji", selectionEnd, 200, 5},
+		{"extend across an emoji", selectionEnd, 220, 5},
 		{"between rows", selectionEnd, 15, 30},
 		{"extend over an attachment", selectionEnd, 85, 45},
 		{"collapse at the end", selectionStart, 200, 80},
@@ -68,6 +75,20 @@ func TestSelectionMatchesJava(t *testing.T) {
 		input.str(node.content)
 		input.floats(float32(node.frame.Origin.X), float32(node.frame.Origin.Y),
 			float32(node.frame.Size.Width), float32(node.frame.Size.Height))
+		var hidden [][2]int
+		for _, sp := range node.spans {
+			if sp.Hidden {
+				hidden = append(hidden, [2]int{
+					driver.UTF16Len(node.content[:sp.Start]),
+					driver.UTF16Len(node.content[:sp.End]),
+				})
+			}
+		}
+		input.u32(uint32(len(hidden)))
+		for _, h := range hidden {
+			input.u32(uint32(h[0]))
+			input.u32(uint32(h[1]))
+		}
 	}
 	input.u32(uint32(len(steps)))
 	for _, step := range steps {

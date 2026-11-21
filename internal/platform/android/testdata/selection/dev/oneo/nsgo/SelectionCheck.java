@@ -1,6 +1,8 @@
 package dev.oneo.nsgo;
 
 import android.content.Context;
+import android.text.SpannableString;
+import android.text.Spanned;
 import android.view.ViewGroup;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -21,7 +23,17 @@ public final class SelectionCheck {
             String text = Protocol.readString(in);
             int x = (int) in.readFloat(), y = (int) in.readFloat();
             int width = (int) in.readFloat(), height = (int) in.readFloat();
-            texts[i] = new TextNode(context, text, x, y, width, height);
+            int hiddenCount = in.readInt();
+            CharSequence content = text;
+            if (hiddenCount > 0) {
+                SpannableString sp = new SpannableString(text);
+                for (int h = 0; h < hiddenCount; h++) {
+                    int hs = in.readInt(), he = in.readInt();
+                    sp.setSpan(new Text.Hidden(), hs, he, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+                content = sp;
+            }
+            texts[i] = new TextNode(context, content, x, y, width, height);
             area.addView(texts[i]);
         }
         Selection selection = new Selection(host, area);

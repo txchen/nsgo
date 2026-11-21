@@ -7,6 +7,7 @@ import android.content.res.TypedArray;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.text.Layout;
+import android.text.Spanned;
 import android.view.ActionMode;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -17,6 +18,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import java.text.BreakIterator;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -239,7 +241,7 @@ final class Selection {
         start = end = null;
     }
 
-    /** The selected text: texts on one row joined by a tab, others by a line break; attachments left out. */
+    /** The selected text: texts on one row joined by a tab, others by a line break; hidden spans and attachments left out. */
     String text() {
         if (start == null) return "";
         StringBuilder out = new StringBuilder();
@@ -251,9 +253,39 @@ final class Selection {
             Rect f = boxes.get(i);
             if (previous != null) out.append(previous.top < f.bottom && f.top < previous.bottom ? '\t' : '\n');
             previous = f;
-            out.append(c.subSequence(from, to).toString().replace("￼", ""));
+            appendCopied(out, c, from, to);
         }
         return out.toString();
+    }
+
+    /** Appends c[from..to) without hidden spans or attachment placeholders (U+FFFC), matching driver.CopiedText. */
+    private static void appendCopied(StringBuilder out, CharSequence c, int from, int to) {
+        if (!(c instanceof Spanned)) {
+            appendVisible(out, c, from, to);
+            return;
+        }
+        Spanned spanned = (Spanned) c;
+        Text.Hidden[] hidden = spanned.getSpans(from, to, Text.Hidden.class);
+        if (hidden.length == 0) {
+            appendVisible(out, c, from, to);
+            return;
+        }
+        Arrays.sort(hidden, (a, b) -> spanned.getSpanStart(a) - spanned.getSpanStart(b));
+        int at = from;
+        for (Text.Hidden h : hidden) {
+            int hs = spanned.getSpanStart(h), he = spanned.getSpanEnd(h);
+            if (he <= at || hs >= to) continue;
+            if (hs > at) appendVisible(out, c, at, hs);
+            at = Math.max(at, he);
+        }
+        if (at < to) appendVisible(out, c, at, to);
+    }
+
+    private static void appendVisible(StringBuilder out, CharSequence c, int from, int to) {
+        for (int i = from; i < to; i++) {
+            char ch = c.charAt(i);
+            if (ch != '\uFFFC') out.append(ch);
+        }
     }
 
     /** The caret of position p: x at it, and its line's top and bottom, in the host. */

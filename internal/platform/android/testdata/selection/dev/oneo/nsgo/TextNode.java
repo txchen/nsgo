@@ -10,7 +10,7 @@ final class TextNode extends View {
     int selectable = Protocol.SELECTABLE_ON;
     int from, to;
 
-    TextNode(Context context, String text, int x, int y, int width, int height) {
+    TextNode(Context context, CharSequence text, int x, int y, int width, int height) {
         super(context, x, y);
         this.text = new Layout(text, width, height);
     }

@@ -85,6 +85,7 @@ type runStyle struct {
 	size          driver.Points
 	lineHeight    driver.Points
 	letterSpacing driver.Points
+	hidden        bool
 }
 
 func newRunStyle(t driver.TextStyle) runStyle {
@@ -181,6 +182,7 @@ func (e *TextEngine) Prepare(t *driver.AttributedText) driver.PreparedText {
 	spanStyle := make([]int, len(t.Spans))
 	for k, sp := range t.Spans {
 		st := newRunStyle(sp.Style)
+		st.hidden = sp.Hidden
 		spanStyle[k] = len(p.styles)
 		for i := range p.styles {
 			if p.styles[i] == st {
@@ -480,6 +482,10 @@ func (p *prepared) Layout(size driver.Size) driver.TextLayout {
 				cx += sg.width
 				continue
 			}
+			if st.hidden {
+				cx += sg.width
+				continue
+			}
 			text := ellipsis
 			if sg.start >= 0 {
 				text = p.t.Text[sg.start:sg.end]
@@ -562,7 +568,11 @@ func (p *prepared) ellipsize(ln *line, width driver.Points) {
 	}
 	// The ellipsis follows as a segment of its own: a run the text does
 	// not hold, which the layout writes in place.
-	ln.segments = append(ln.segments, segment{start: -1, style: last.style, width: ew, attachment: -1})
+	ellipsisStyle := last.style
+	if p.styles[ellipsisStyle].hidden {
+		ellipsisStyle = 0
+	}
+	ln.segments = append(ln.segments, segment{start: -1, style: ellipsisStyle, width: ew, attachment: -1})
 	ln.width += ew
 	ln.trimmed = ln.width
 }
