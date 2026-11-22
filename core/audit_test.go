@@ -2,8 +2,10 @@ package core
 
 import (
 	"math"
+	"slices"
 	"testing"
 
+	"github.com/nsgo-dev/nsgo/internal/devtools"
 	"github.com/nsgo-dev/nsgo/internal/driver"
 )
 
@@ -257,8 +259,120 @@ func TestAuditNumbersDropAWholeDecimal(t *testing.T) {
 func TestAuditGridStartsAtItsSmallestStep(t *testing.T) {
 	cx := testRoot(RootOptions{})
 	for grid, want := range map[Points]Points{0: 0, 2: minAuditGrid, 12: 12, Points(math.NaN()): 0, -8: 0} {
-		if got := newLayoutAudit(cx, LayoutAudit{Grid: grid}).grid.GetUntracked(); got != want {
+		if got := newLayoutAudit(cx, LayoutAudit{Grid: grid}, false).grid.GetUntracked(); got != want {
 			t.Errorf("a grid of %v starts at %v, want %v", grid, got, want)
 		}
+	}
+}
+
+// A platform-presented iOS sheet (ModalPageSheet / ModalFormSheet sized by EventModalSize) mounts its own Topmost DevTools overlay inside the sheet so the layout audit, update highlights and Pick work inside it while staying out of Elements and cleaning up on close.
+func TestDevToolsOverlayInsideIOSSheetModal(t *testing.T) {
+	devtools.Enabled = true
+	t.Cleanup(func() {
+		devtools.Enabled = false
+		for _, s := range devtools.Surfaces() {
+			devtools.Unregister(s)
+		}
+	})
+	var sheetOpen *Signal[bool]
+	var sheetCount *Signal[int]
+	pressed := 0
+	h := newHost(t, Size{Width: 390, Height: 844}, func(cx *Scope) Node {
+		sheetOpen = NewSignal(cx, true)
+		sheetCount = NewSignal(cx, 0)
+		return Group{
+			View{TestID: "app", Style: Style{FlexGrow: 1}, Children: []Node{
+				Show{When: sheetOpen.Get, Then: func(cx *Scope) Node {
+					return Modal{TestID: "sheet", Presentation: ModalPageSheet, Children: []Node{
+						View{TestID: "sheet-btn", Style: Style{Width: Pt(100), Height: Pt(40)},
+							OnPress: func(PressEvent) { pressed++ },
+							Children: []Node{
+								Text{TestID: "sheet-label", ContentFunc: func() string {
+									if sheetCount.Get() == 0 {
+										return "Sheet 0"
+									}
+									return "Sheet 1"
+								}},
+							}},
+					}}
+				}},
+			}},
+			UpdateHighlights{Layout: LayoutAudit{Bounds: true}},
+		}
+	})
+	h.commit()
+	h.drain()
+
+	sheet := h.find("sheet")
+	h.tree.Dispatch(driver.Event{Kind: driver.EventModalSize, ID: sheet.id, Size: Size{Width: 300, Height: 540}, Insets: Edges{Bottom: 20}})
+	h.commit()
+	h.drain()
+
+	if len(h.tree.highlights.sheets) != 1 {
+		t.Fatalf("sheet overlays = %d, want 1", len(h.tree.highlights.sheets))
+	}
+	sh := h.tree.highlights.sheets[0]
+	if sh.root.n == nil || sh.root.n.hoist == nil || sh.root.n.hoist.host != sheet {
+		t.Fatalf("sheet overlay host = %v, want sheet modal", sh.root.n)
+	}
+	// Root audit leaves out the reported sheet; sheet audit covers sheet, sheet-btn and sheet-label.
+	for _, b := range h.tree.auditBoxes(nil) {
+		if b.bounds == h.tree.surfaceBounds(h.find("sheet-btn")) {
+			t.Error("root auditBoxes included a view inside a reported sheet")
+		}
+	}
+	if got := len(h.tree.auditBoxesFrom(sheet, nil)); got != 3 {
+		t.Fatalf("sheet auditBoxesFrom = %d, want 3 (sheet, sheet-btn, sheet-label)", got)
+	}
+
+	// Changing a text inside the sheet highlights it in the sheet's own overlay.
+	sheetCount.Set(1)
+	h.commit()
+	h.drain()
+	if len(sh.boxes.GetUntracked()) == 0 {
+		t.Fatal("updating a view inside the sheet produced no highlight box in the sheet overlay")
+	}
+
+	// Pick inside the sheet hits sheet-btn without pressing it.
+	s := &devSurface{h.tree}
+	var picked uint32
+	s.Pick(true, nil, func(id uint32) { picked = id })
+	h.commit()
+	var sheetPick *node
+	for _, n := range h.tree.nodes {
+		if n != nil && !n.deleted && n.props.TestID == "nsgo-devtools-pick" && h.tree.highlights.sheetFor(n) == sh {
+			sheetPick = n
+		}
+	}
+	if sheetPick == nil {
+		t.Fatal("no pick catcher mounted inside the sheet overlay")
+	}
+	h.tree.Dispatch(driver.Event{Kind: driver.EventPressDown, ID: sheetPick.id, Point: Point{X: 10, Y: 10}})
+	h.commit()
+	if pressed != 0 {
+		t.Fatalf("sheet-btn pressed %d times during Pick, want 0", pressed)
+	}
+	if picked != uint32(h.find("sheet-label").id) {
+		t.Fatalf("picked = %d, want sheet-label %d", picked, h.find("sheet-label").id)
+	}
+
+	// Elements excludes the sheet's DevTools overlay.
+	var hasDevView func(devtools.Node) bool
+	hasDevView = func(n devtools.Node) bool {
+		if n.TestID == devtools.OverlayTestID || n.TestID == "nsgo-layout-audit" {
+			return true
+		}
+		return slices.ContainsFunc(n.Children, hasDevView)
+	}
+	if hasDevView(s.Elements()) {
+		t.Error("Elements lists DevTools' sheet overlay views")
+	}
+
+	// Closing the sheet cleanly removes its sheetHighlights entry.
+	sheetOpen.Set(false)
+	h.commit()
+	h.drain()
+	if len(h.tree.highlights.sheets) != 0 {
+		t.Fatalf("sheet overlays after close = %d, want 0", len(h.tree.highlights.sheets))
 	}
 }

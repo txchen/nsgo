@@ -50,6 +50,8 @@ func TestDevClientStartsDevToolsOnceBeforeTheGraph(t *testing.T) {
 		devServer, devDevtools, devtools.ServerToken = "", "", ""
 		engine.Trace, driver.Applied = nil, nil
 		devtools.Enabled, driver.TraceCauses = false, false
+		devtools.MountOverlay = nil
+		devOverlays.Store(nil)
 	})
 
 	// As nsgo.Run does before it starts the engine.

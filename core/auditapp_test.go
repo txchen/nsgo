@@ -261,7 +261,7 @@ func TestDevToolsShowAndHideTheLayoutAudit(t *testing.T) {
 	}
 }
 
-// A surface without DevTools' overlay, as a window desktop.OpenWindow opens, answers that its audit is hidden, so the page's Layout follows it.
+// A surface without DevTools' overlay answers that its audit is hidden, so the page's Layout follows it.
 func TestDevToolsHearNoLayoutAuditWithoutTheOverlay(t *testing.T) {
 	devtools.Enabled = true
 	t.Cleanup(func() { devtools.Enabled = false })
@@ -279,5 +279,23 @@ func TestDevToolsHearNoLayoutAuditWithoutTheOverlay(t *testing.T) {
 	app.Settle()
 	if !slices.Equal(shown, []bool{false}) {
 		t.Errorf("DevTools heard %v, want the audit hidden", shown)
+	}
+}
+
+// LayoutHidden keeps the -layout audit's config and Mod+Alt+Shift+L key binding while starting hidden (for a surface opened after the user hid the audit).
+func TestLayoutAuditHiddenKeepsConfigAndKey(t *testing.T) {
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return core.Group{
+			core.View{TestID: "app", Style: core.Style{FlexGrow: 1}},
+			core.UpdateHighlights{NoUpdates: true, Layout: core.LayoutAudit{Grid: 4}, LayoutHidden: true},
+		}
+	})
+	if app.Exists("id:nsgo-layout-audit") {
+		t.Fatal("LayoutHidden audit showed on start")
+	}
+	app.Key("mod+alt+shift+l")
+	ops := app.Find("id:nsgo-layout-canvas").Ops
+	if strokes(ops, auditGrid) != 1 || strokes(ops, auditBorder) != 0 {
+		t.Fatalf("after mod+alt+shift+l: grid=%d border=%d, want grid=1 border=0", strokes(ops, auditGrid), strokes(ops, auditBorder))
 	}
 }
