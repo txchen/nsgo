@@ -359,7 +359,7 @@ cx.RequestAnimationFrame(loop)
 
 ## 登录
 
-`cx.AuthSession` 在系统的认证会话里用 OAuth 服务登录，而不是在网页视图里：macOS 和 iOS 用 `ASWebAuthenticationSession`，Windows、Linux 以及没有设置 scheme 的 Mac 用默认浏览器加回环地址重定向，Web 用弹出窗口。协议由应用负责：它生成 PKCE 校验码和 state，为传给它的重定向地址拼出授权 URL，并在用 code 换令牌前检查回调。取消不算失败：`errors.Is(err, core.AuthCancelled)` 表示用户关闭了会话，或返回的 `cancel` 结束了它。
+`cx.AuthSession` 在系统的认证会话里用 OAuth 服务登录，而不是在网页视图里：macOS、iOS 和 watchOS 用 `ASWebAuthenticationSession`，Windows、Linux 以及没有设置 scheme 的 Mac 用默认浏览器加回环地址重定向，Web 用弹出窗口。协议由应用负责：它生成 PKCE 校验码和 state，为传给它的重定向地址拼出授权 URL，并在用 code 换令牌前检查回调。取消不算失败：`errors.Is(err, core.AuthCancelled)` 表示用户关闭了会话，或返回的 `cancel` 结束了它。
 
 ```go
 verifier, challenge, state := newPKCE() // 应用自己的实现
@@ -382,7 +382,7 @@ cx.AuthSession(func(redirect string) string {
 })
 ```
 
-系统会话能捕获 scheme 的平台上，重定向地址是 `com.example.app:/oauth2redirect`，应用不必声明这个 scheme；桌面的回环地址上是 `http://127.0.0.1:<端口>/oauth2redirect`，所以两者都要在服务方登记，通常各是一个客户端。`Scheme` 留空则只用回环地址；设为 `https` 并给出 `Host` 则用应用的关联域名，iOS 17.4 和 macOS 14.4 起能捕获。浏览器标签页被关闭时回环会话无从得知，所以要给它 `Timeout` 或一个取消按钮。`Ephemeral` 让 macOS 和 iOS 不共享浏览器的 Cookie。Android、tvOS、watchOS 和小程序目前回答 `core.AuthUnavailable`。在 TSX 中，`AuthSession.start(url, options)` 需要 `auth_session` 能力，返回的会话的 `result` 解析为回调地址，取消时为 null。
+系统会话能捕获 scheme 的平台上，重定向地址是 `com.example.app:/oauth2redirect`，应用不必声明这个 scheme；桌面的回环地址上是 `http://127.0.0.1:<端口>/oauth2redirect`，所以两者都要在服务方登记，通常各是一个客户端。`Scheme` 留空则只用回环地址；设为 `https` 并给出 `Host` 则用应用的关联域名，iOS 17.4、macOS 14.4 和 watchOS 10.4 起能捕获。watchOS 必须设置 scheme 或关联 HTTPS 域名，不提供回环回退；NSGo 原有的 watchOS 26 最低要求不变。浏览器标签页被关闭时回环会话无从得知，所以要给它 `Timeout` 或一个取消按钮。`Ephemeral` 让 macOS、iOS 和 watchOS 不共享浏览器的 Cookie。Android、tvOS 和小程序目前回答 `core.AuthUnavailable`。在 TSX 中，`AuthSession.start(url, options)` 需要 `auth_session` 能力，返回的会话的 `result` 解析为回调地址，取消时为 null。
 
 应用的 web view 要以用户在别处（例如自己的浏览器里）已有的登录状态打开页面时，用 `cx.SetWebCookies` 写入这次登录的 Cookie，包括页面脚本写不了的 HttpOnly Cookie，再加载页面：存储收下它们后 done 才会运行。写入的是应用所有 web view 共用的持久存储，带 `Expires` 的 Cookie 在应用退出后仍然保留；无痕（Incognito）web view 看不到它们，但 Android 每个应用只有一个存储，那里也看得到。Web、tvOS 和 watchOS 回答 `Unavailable`。
 
