@@ -11,7 +11,7 @@ import (
 	"github.com/nsgo-dev/nsgo/internal/driver"
 )
 
-// Auth sessions on the web open the provider in a popup window, which keeps the page and the app's state where a redirect of the page itself would lose them. The popup opens blank as the session starts, while the press that started it still lets a page open one, and goes to the authorization URL once the app built it. The provider redirects to a page of the app's origin, the redirect, which the page reads from the popup, as it may once the popup is back on its origin, and closes; a popup the user closes ends the session cancelled. The page served at the redirect shows only for that moment.
+// Auth sessions on the web open the provider in a popup window, which keeps the page and the app's state where a redirect of the page itself would lose them. The popup opens blank as the session starts, while the press that started it still lets a page open one, and goes to the authorization URL once the app built it. The provider redirects to a page of the app's origin, whose page sends the callback over a BroadcastChannel so Cross-Origin-Opener-Policy cannot make the opener mistake it for a closed popup; address polling remains the fallback. A popup the user closes ends the session cancelled. The page served at the redirect shows only for that moment.
 
 // webAuth is a popup an auth session shows.
 type webAuth struct {
