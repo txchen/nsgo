@@ -145,6 +145,24 @@ The desktop main column uses the monitor's measured work per frame. In particula
 
 Batching is warranted on macOS, where each crop creates a Core Graphics subimage and both loads miss 60 Hz, and on Android at 5,000 sprites, where main-thread work alone exceeds one refresh. The Linux software renderer also falls short and warrants measuring a reused atlas pattern on native Linux. Chrome holds 60 Hz at 1,000 and falls below it at 5,000. Windows keeps about 45 callbacks/s at both loads, while its main-thread work rises from 1.39 to 4.87 ms. [DrawAtlas](https://github.com/nsgo-dev/nsgo/issues/1103) tracks the implementation and comparison.
 
+### Deforming mesh
+
+`TestPerfCanvasMesh1000` draws the same atlas through one `DrawVertices` of 1,000 triangles that cover the canvas, every inner vertex moving each frame, for [#1211](https://github.com/nsgo-dev/nsgo/issues/1211). `TestCanvasMeshWorkload` checks the recorded mesh headless, and `BenchmarkPlayDeformingMesh` in `internal/platform/apple` plays the same load into a BGRA context at 2× without a window.
+
+```sh
+go tool nsgo test -target macos -fps -env NSGO_GALLERY_PERF=1 -run '^TestPerfCanvasMesh1000$' ./examples/gallery
+```
+
+Readings from 2026-11-22 on macOS 27.2, M4 Pro, 120 Hz, 1200 × 800 points, before and after the rasterizer took bands on every processor and Apple composited on the device's pixels. Runs alternated on a machine whose other work kept the load average at 57–109, so they compare with each other, not with the sprite table.
+
+| Run | Callbacks/s before | After |
+| --- | ---: | ---: |
+| 1 | 27.8 | 62.5 |
+| 2 | 49.0 | 98.2 |
+| 3 | 62.8 | 114.7 |
+
+`BenchmarkPlayDeformingMesh` took 18–23 ms a frame before and 7–14 ms after at 12 processors, and 42–46 ms of CPU before and 30–34 ms after at one. Compositing the raster fell from about a quarter of the CPU profile to about 1%: drawn at its pixels as BGRA, Core Graphics copies it rather than resampling and converting it. Sampling the texture is most of what remains.
+
 ## Partial frames on Windows
 
 As NSH's, a frame draws only what changed since its back buffer was drawn and presents only what changed since the last frame (`internal/platform/windows/damage.go`):
