@@ -9,7 +9,7 @@ export declare function InputAccessoryView(props: InputAccessoryViewProps): YNod
 export interface TabBarItem {
     title: string;
     icon?: string | null;
-    /** An SVG document Android shows, tinted by the bar, where icon names no drawable. */
+    /** An SVG document iOS and Android show, tinted by the bar, where icon names no SF Symbol or drawable. */
     svg?: string | null;
 }
 export type TabBarEdge = "bottom" | "leading" | "trailing" | "automatic";

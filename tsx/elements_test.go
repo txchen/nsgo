@@ -57,7 +57,9 @@ mount(App);`)
 }
 
 func TestTabBarSVGFromTSX(t *testing.T) {
-	app := run(t, `import { mount, signal, View, Text } from "nsgo";
+	for _, os := range []core.OS{core.OSAndroid, core.OSIOS} {
+		t.Run(string(os), func(t *testing.T) {
+			app := run(t, `import { mount, signal, View, Text } from "nsgo";
 import { TabBar } from "nsgo/mobile";
 function App() {
     const selected = signal(0);
@@ -70,13 +72,15 @@ function App() {
         <Text>{() => "selected " + selected()}</Text>
     </View>;
 }
-mount(App);`, nsgotest.Environment(core.Environment{OS: core.OSAndroid}))
-	items := app.Find("id:bar").NativeProps["items"].([]any)
-	if d, ok := items[0].(map[string]any)["drawing"].(*driver.Drawing); !ok || len(d.Ops) == 0 {
-		t.Fatal("TSX SVG did not reach the native bar")
+mount(App);`, nsgotest.Environment(core.Environment{OS: os}))
+			items := app.Find("id:bar").NativeProps["items"].([]any)
+			if d, ok := items[0].(map[string]any)["drawing"].(*driver.Drawing); !ok || len(d.Ops) == 0 {
+				t.Fatalf("%s: TSX SVG did not reach the native bar", os)
+			}
+			app.Emit("id:bar", "change", float64(1))
+			app.Find("text:selected 1")
+		})
 	}
-	app.Emit("id:bar", "change", float64(1))
-	app.Find("text:selected 1")
 }
 
 func TestTabBarEdgeFromTSX(t *testing.T) {

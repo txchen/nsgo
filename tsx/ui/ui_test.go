@@ -203,15 +203,19 @@ function App() {
     ]} />;
 }
 mount(App);`)}}
-	app := nsgotest.Start(t, compiler.App(files, "App.tsx"), nsgotest.Environment(core.Environment{OS: core.OSAndroid}))
-	items := app.FindMounted("id:tab-bar").NativeProps["items"].([]any)
-	for _, item := range items {
-		if d, ok := item.(map[string]any)["drawing"].(*driver.Drawing); !ok || len(d.Ops) == 0 {
-			t.Fatal("TSX shell icon did not reach Android's native bar")
-		}
+	for _, os := range []core.OS{core.OSAndroid, core.OSIOS} {
+		t.Run(string(os), func(t *testing.T) {
+			app := nsgotest.Start(t, compiler.App(files, "App.tsx"), nsgotest.Environment(core.Environment{OS: os}))
+			items := app.FindMounted("id:tab-bar").NativeProps["items"].([]any)
+			for _, item := range items {
+				if d, ok := item.(map[string]any)["drawing"].(*driver.Drawing); !ok || len(d.Ops) == 0 {
+					t.Fatalf("%s: TSX shell icon did not reach the native bar", os)
+				}
+			}
+			app.Emit("id:tab-bar", "change", float64(1))
+			app.Find("text:Search page")
+		})
 	}
-	app.Emit("id:tab-bar", "change", float64(1))
-	app.Find("text:Search page")
 }
 
 func TestAlertDialogActionRolesFromTSX(t *testing.T) {
