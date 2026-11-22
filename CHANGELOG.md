@@ -45,7 +45,7 @@
 - Bind `desktop.OpenWindow`, `desktop.OpenPanel`, `desktop.NewTray`, `mobile.OpenOverlay`, `audio.NewPlayer`, `audio.LoadSound` and `nsgo.SetMainView` to the explicit `*core.Scope` passed rather than the running handler's owner, so opening a window or audio player with the app's scope from a button or menu handler no longer closes it when that button's scope disposes (#1259 by @henry-wm).
 - Add `nsgo build -channel steam` for desktop depots with development-only `steam_appid.txt` support and bundled GTK 4 on Linux x64 (#1227 and #1290 by @houko).
 - Build one universal Mac App Store package or dual-ABI Android App Bundle when both platform architectures are selected (#1231 by @houko).
-- Record window and share requests as `nsgotest.WindowRequest` and `nsgotest.Share`, with window action constants in `nsgotest` (#181 by @houko).
+- Record window and share requests as `nsgotest.WindowRequest` and `nsgotest.Share`, with window action constants and owned platform reports in `nsgotest` (#181 by @houko).
 - Keep a read-only input's text selectable and copyable on macOS and iOS, the latter with no keyboard, stop edits at once in a macOS field made read-only while it is edited, and make `Readonly` and `Disabled` stop edits on HarmonyOS, which ignored them.
 - Keep macOS presses inside a Liquid Glass view, such as `chat.EffortPicker`'s panel, reaching the app after the first, as AppKit swallowed the release of a press it passed up through the glass.
 - Keep a `base/plot` line's or area's canvas within the plot's height past its edges, where values far outside the y domain, as a history emptied while its axis moves, made it millions of points tall and crashed Linux apps, which now skip a canvas Cairo cannot hold.
