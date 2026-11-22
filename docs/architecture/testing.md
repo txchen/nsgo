@@ -27,6 +27,10 @@ Widget timelines and Live Activities belong to the process, including calls made
 
 The headless model converts window and share requests to `nsgotest.WindowRequest` and `nsgotest.Share` as it applies batches. A window request names its action independently of the protocol's action numbers, and a share keeps a snapshot of its files, text and anchor.
 
+## Windowless native drawings
+
+On macOS, `PlatformTextEngine`, `RegisterFont` and `Render` expose native text measurement, process font registration and bitmap drawing through `nsgotest`, without starting a host. This is an NSGo addition beyond NSH's model: `nsgotest` may import the shared Apple player while `core` stays independent of backends. Rendering uses a private synchronous image resolver, never the main-thread canvas caches or dispatch queue, so it also works without an event loop. Each render releases its native images and bitmap and returns owned premultiplied RGBA pixels. It rejects unresolved animation slots and view paints, image errors, offscreen cycles and invalid or oversized dimensions. Windows, Linux and device services remain [roadmap](../roadmap.md#from-nsgos-issues) goals.
+
 ## Steps
 
 `App.Post` queues app work until the next step or wait settles. Headless the test owns the app's graph; on a target the callback is posted to the scope the native host rendered the app under, and the step's engine barrier waits for it. A step on a target is quiet only once no posts are queued after its last engine barrier, so a post that posts another settles in the same step. The test's separate graph still runs its own storage and model callbacks on the test goroutine, as `testhost.PostToTest` runs tsxtest's VM work.

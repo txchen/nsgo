@@ -231,6 +231,8 @@ type CanvasHost struct {
 	Redraw func()
 	Owner  any
 	BaseUp bool
+	// image resolves a windowless render's images without the view cache.
+	image func(driver.ImageSource, float64) *loadedImage
 }
 
 // Play draws ops into ctx, a view's context with its y axis pointing
@@ -755,7 +757,13 @@ func (p *player) image(op *driver.DrawOp) {
 	var cgImg uintptr
 	var imgWidth float64
 	var points driver.Size
-	if op.Image.Offscreen != nil {
+	if p.host.image != nil {
+		img := p.host.image(*op.Image, p.host.Ratio)
+		if img == nil || img.image == 0 {
+			return
+		}
+		cgImg, imgWidth, points = img.image, img.width, img.points
+	} else if op.Image.Offscreen != nil {
 		var waited bool
 		cgImg, imgWidth, _, points, waited = offscreenImage(*op.Image, p.host)
 		p.waited = p.waited || waited

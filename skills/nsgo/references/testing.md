@@ -64,6 +64,8 @@ Use `app.Window` and `nsgotest.WindowAction` constants such as `nsgotest.WindowS
 
 Headless tests can press a physical position with `KeyCode("KeyW")` or hold and release it with `KeyCodeDown` and `KeyCodeUp`. Override `core.Environment.KeyCodeNames` to exercise a layout. Unspecified positions use the US layout.
 
+For native headless canvas pixels on macOS, use `nsgotest.Render` on a recorded `Drawing`. Pass `nsgotest.TextEngine(nsgotest.PlatformTextEngine())` to match CoreText metrics, and call `nsgotest.RegisterFont` before starting the app. Rendering waits for images, returns errors and requires resolved view paints and animation slots; other targets return `nsgotest.ErrNoPlayer`. [Windowless drawings](https://nsgo.dev/docs/testing.md#drawings-without-a-window)
+
 ## Tests without the network
 
 Use `app.AppleSignIn` or `app.PurchaseAnswer` when a test needs to answer Sign in with Apple or a purchase. The hooks receive `nsgotest.AppleSignInRequest` and `nsgotest.PurchaseRequest` records. [Services](https://nsgo.dev/docs/services.md)

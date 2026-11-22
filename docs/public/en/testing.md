@@ -74,6 +74,14 @@ Headless Linux and Android tests can check the package paths passed to the insta
 
 `app.Orientation` holds the active `Scope.RequestOrientation` mask. It is zero when the app uses its usual orientation policy.
 
+## Drawings without a window
+
+On macOS, `nsgotest.PlatformTextEngine()` gives headless tests CoreText metrics. Pass it through `nsgotest.TextEngine`; elsewhere it returns nil and the model keeps its approximate metrics. Register font bytes with `nsgotest.RegisterFont` before starting the app.
+
+`nsgotest.Render(app.Find("id:score").Drawing, core.Size{Width: 600, Height: 800}, 2)` replays the recorded canvas into an owned `*image.RGBA` without opening a window. Encode it with `image/png` or compare its pixels. Size is in points, scale is pixels per point, and the transparent output is limited to 16 Mi pixels. Both must be finite and positive. Images load synchronously with a 30-second deadline; animated images use their first frames, and failures return an error. Resolve animation slots and view paints before rendering.
+
+Windowless rendering and font registration currently support macOS. Other targets return `nsgotest.ErrNoPlayer`; native-target `Screenshot` remains available independently.
+
 ## Widgets and Live Activities
 
 `nsgotest.Widgets(true)` records what the app publishes with `widget.Update`. Read the latest timeline for each kind with `app.Widgets()`. An entry with no date gets the app's wall time. Use `nsgotest.Widgets(false)` to make `widget.Available()` false and have updates return `widget.ErrNoWidgets`.
