@@ -13,6 +13,7 @@ import (
 
 	"github.com/caelyreth/untie"
 
+	_ "github.com/nsgo-dev/nsgo"
 	"github.com/nsgo-dev/nsgo/base/formula/locales"
 	"github.com/nsgo-dev/nsgo/base/textview"
 	"github.com/nsgo-dev/nsgo/core"
@@ -23,6 +24,8 @@ import (
 
 // The SHA-256 of fonts/NewCMMath-Book.otf, as typst/typst-assets@94dcb990 has it.
 const fontDigest = "2ea09ebc9167b1e1a66f31390dc917f2d4004ecfca72d51b28010e4ad6becd95"
+
+func TestMain(m *testing.M) { nsgotest.Main(m) }
 
 func TestBundledFont(t *testing.T) {
 	sum := sha256.Sum256(newCMMath)
@@ -156,13 +159,13 @@ func TestViewSizesByFontAndReads(t *testing.T) {
 		t.Errorf("the inline formula reaches %v below the baseline, want its subscript's depth", below)
 	}
 
-	size.Set(32)
+	app.Post(func() { size.Set(32) })
 	app.Settle()
 	app.Screenshot("formula-baseline")
 	if got := app.Find("id:half").Frame.Size; math.Abs(float64(got.Width-2*small.Width)) > 1 || math.Abs(float64(got.Height-2*small.Height)) > 1 {
 		t.Errorf("at 32 points %v, at 16 %v: it doubles", got, small)
 	}
-	source.Set(`x_i^2`)
+	app.Post(func() { source.Set(`x_i^2`) })
 	app.Settle()
 	if got := app.Find("id:half").Props.Label; got != "x sub i squared" {
 		t.Errorf("label %q after its source changed", got)
@@ -173,6 +176,28 @@ func TestViewSizesByFontAndReads(t *testing.T) {
 	}
 	if got := app.Find("id:empty").Props.Label; got != "公式" {
 		t.Errorf("an empty formula's label %q in Chinese", got)
+	}
+}
+
+func TestViewHitEventsCarryPartsCaretsAndDiagnostics(t *testing.T) {
+	r := newRenderer(Fonts{Math: newCMMath})
+	var events []HitEvent
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return View{TestID: "formula", Source: `x^2`, Renderer: r,
+			Diagnostics: []untie.Diagnostic{{Range: untie.Range{Start: 0, End: 1}, Message: "base"}},
+			OnHit:       func(event HitEvent) { events = append(events, event) }}
+	}, nsgotest.Size(300, 200), nsgotest.Environment(core.Environment{Idiom: core.IdiomDesktop, OS: core.OSMacOS}))
+	waitForFont(app, r, "id:formula")
+	v := app.Find("id:formula")
+	point := driver.Point{X: driver.Points(v.Frame.Size.Width / 2), Y: driver.Points(v.Frame.Size.Height / 2)}
+	app.HoverAt("id:formula", point)
+	app.PressAt("id:formula", point)
+	if len(events) < 2 {
+		t.Fatalf("events = %#v, want hover and click", events)
+	}
+	click := events[len(events)-1]
+	if click.Phase != HitClick || !click.Found || !click.HasCaret || len(click.Diagnostics) != 1 || click.Diagnostics[0].Message != "base" {
+		t.Fatalf("click event = %+v, want hit, caret and diagnostic", click)
 	}
 }
 
@@ -223,7 +248,7 @@ func TestViewPaints(t *testing.T) {
 	if len(app.Find("id:ink").Drawing.ViewPaints) == 0 {
 		t.Error("ink is no view paint: a new text color would draw the formula again")
 	}
-	color.Set(core.RGB(0x0000ff))
+	app.Post(func() { color.Set(core.RGB(0x0000ff)) })
 	app.Settle()
 	if got := fills("ink"); len(got) != 1 || got[0] != core.RGB(0x0000ff) {
 		t.Errorf("ink fills %v after the text color changed", got)
