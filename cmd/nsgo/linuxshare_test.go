@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,7 +12,7 @@ import (
 // The Debian and Arch packages install NSGo's AppStream metadata and linux.share's files under /usr/share, where software centers and desktops read them, rather than in the app's directory, and the AppImage holds them in its AppDir's usr/share; the app's own metadata replaces NSGo's.
 func TestLinuxShare(t *testing.T) {
 	dir := t.TempDir()
-	writeFiles(t, dir, map[string]string{"App": "binary", "dev.example.app.png": "icon"})
+	writeFiles(t, dir, map[string]string{"App": "binary", "dev.example.app.png": "icon", "dev.example.app.desktop": "entry"})
 	os.Chmod(filepath.Join(dir, "App"), 0o755)
 	share := t.TempDir()
 	writeFiles(t, share, map[string]string{
@@ -40,6 +41,16 @@ func TestLinuxShare(t *testing.T) {
 	}
 	if !slices.ContainsFunc(entries, func(e linuxPackageEntry) bool { return e.name == "usr/share/metainfo/dev.example.app.metainfo.xml" }) {
 		t.Error("the AppImage lacks the metadata")
+	}
+	// The metadata's launchable is the desktop entry in usr/share/applications, which links to the one at the AppDir's top.
+	if i := slices.IndexFunc(entries, func(e linuxPackageEntry) bool { return e.name == "usr/share/applications/dev.example.app.desktop" }); i < 0 || entries[i].link != "../../../dev.example.app.desktop" {
+		t.Errorf("the AppImage's usr/share/applications/dev.example.app.desktop is %+v", entries)
+	} else if resolved := path.Join(path.Dir(entries[i].name), entries[i].link); resolved != "dev.example.app.desktop" ||
+		!slices.ContainsFunc(entries, func(e linuxPackageEntry) bool { return e.name == resolved && e.link == "" && !e.dir }) {
+		t.Errorf("the desktop entry's link resolves to %s, which the AppDir does not hold", resolved)
+	}
+	if _, err := sqfsTree(entries); err != nil {
+		t.Fatal(err)
 	}
 
 	p.Linux.Share = share
