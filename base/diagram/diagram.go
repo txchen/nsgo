@@ -3,6 +3,9 @@ package diagram
 
 import (
 	"errors"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/firede/limu"
@@ -24,6 +27,9 @@ type View struct {
 	FontSize core.Points
 	// Theme colors the diagram over the appearance's theme: Pele's light theme in light, and its gray counterpart in dark, with the same blue accent as NSGo's own look.
 	Theme *Theme
+	// Icons supplies SVG documents by the names used in the source, such as "fa:fa-car".
+	// Missing or nil entries leave icons out. Render snapshots the map; SVGs may be shared with core.Icon.
+	Icons map[string]*core.SVG
 	// Label is what assistive technology reads in place of the diagram's title and description.
 	Label     string
 	Class     string
@@ -97,9 +103,10 @@ type laidOut struct {
 type layoutKey struct {
 	source string
 	size   float64
+	icons  string
 }
 
-// layouts keeps diagrams laid out by source and size, so a diagram a list shows again, or one each copy of a chat shows, is laid out once. A layout measures with the platform's text engine, which every diagram of the process shares.
+// layouts keeps diagrams laid out by source, size and available icons, so a diagram a list shows again, or one each copy of a chat shows, is laid out once. A layout measures with the platform's text engine, which every diagram of the process shares.
 var layouts = struct {
 	sync.Mutex
 	m map[layoutKey]laidOut
@@ -109,8 +116,8 @@ var layouts = struct {
 const maxLayouts = 256
 
 // lay parses and lays out source at size, measuring labels with m.
-func lay(source string, size float64, m *measurer) laidOut {
-	key := layoutKey{source: source, size: size}
+func lay(source string, size float64, m *measurer, icons map[string]*core.SVG, iconKey string) laidOut {
+	key := layoutKey{source: source, size: size, icons: iconKey}
 	layouts.Lock()
 	l, ok := layouts.m[key]
 	layouts.Unlock()
@@ -119,7 +126,11 @@ func lay(source string, size float64, m *measurer) laidOut {
 	}
 	d, err := limu.Parse(source, ldiagram.Options{})
 	if err == nil {
-		l.scene, err = d.Layout(&layout.Options{Measurer: m, FontSize: size})
+		l.scene, err = d.Layout(&layout.Options{
+			Measurer: m, FontSize: size,
+			Icons:        func(name string) bool { return icons[name] != nil },
+			ImageSchemes: []string{"http", "https", "asset", "file", "blob"},
+		})
 	}
 	l.err = err
 	layouts.Lock()
@@ -145,14 +156,16 @@ func (v View) Render(cx *core.Scope) core.Node {
 		size = defaultFontSize
 	}
 	m := newMeasurer(cx)
+	icons, iconKey := snapshotIcons(v.Icons)
 	env := cx.Env()
 	laid := core.NewMemoFunc(cx, func() laidOut {
 		src := source()
 		if src == "" {
 			return laidOut{err: errEmpty}
 		}
-		return lay(src, float64(size)*float64(env.FontScale()), m)
+		return lay(src, float64(size)*float64(env.FontScale()), m, icons, iconKey)
 	}, func(a, b laidOut) bool { return a.scene == b.scene && a.err == b.err })
+	images := pictureSizes(cx, func() *scene.Scene { return laid.Get().scene })
 	failed := core.NewMemo(cx, func() bool { return laid.Get().err != nil })
 	msgs := func() locales.Messages { return locales.For(cx) }
 	return core.Show{
@@ -186,7 +199,7 @@ func (v View) Render(cx *core.Scope) core.Node {
 					}
 					// A style that sets another size stretches the diagram to it.
 					d.Scale(float32(sz.Width)/float32(sc.Width), float32(sz.Height)/float32(sc.Height))
-					paint(d, sc, v.Theme.look(env.Dark()), m)
+					paint(d, sc, v.Theme.look(env.Dark()), m, icons, images())
 				},
 			}
 		},
@@ -228,4 +241,25 @@ func defaultTheme(dark bool) *style.Theme {
 		Radius:      4,
 		StrokeWidth: 1,
 	}
+}
+
+// snapshotIcons keeps an app's map out of cached layouts. Only the available names affect
+// label geometry; documents are drawn from this view, never retained by the layout cache.
+func snapshotIcons(in map[string]*core.SVG) (map[string]*core.SVG, string) {
+	out := make(map[string]*core.SVG, len(in))
+	names := make([]string, 0, len(in))
+	for name, svg := range in {
+		if svg != nil {
+			out[name] = svg
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	var key strings.Builder
+	for _, name := range names {
+		key.WriteString(strconv.Itoa(len(name)))
+		key.WriteByte(':')
+		key.WriteString(name)
+	}
+	return out, key.String()
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/nsgo-dev/nsgo/nsgotest"
 )
 
+func TestMain(m *testing.M) { nsgotest.Main(m) }
+
 const flowchart = "flowchart LR\n  A[Start] --> B{Choice}\n  B -->|yes| C[Done]"
 
 // texts are what a canvas's drawing writes, in order.
