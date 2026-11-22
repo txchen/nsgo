@@ -8,7 +8,7 @@ import { camera, cameraPicker } from '@kit.CameraKit';
 import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
 import { accessibility } from '@kit.AccessibilityKit';
 import { formProvider, formBindingData } from '@kit.FormKit';
-import { display, window, typeNode, BuilderNode, NodeController, FrameNode, UIContext, componentSnapshot } from '@kit.ArkUI';
+import { display, window, typeNode, BuilderNode, NodeController, FrameNode, UIContext, componentSnapshot, LengthMetricsUnit } from '@kit.ArkUI';
 import { displaySync } from '@kit.ArkGraphics2D';
 import { common, ConfigurationConstant, abilityAccessCtrl, bundleManager } from '@kit.AbilityKit';
 import type { Permissions, PermissionRequestResult } from '@kit.AbilityKit';
@@ -159,6 +159,7 @@ interface TextRun {
 interface CanvasOp {
   k: number;
   imgd?: string;
+  tint?: number;
   x?: number;
   y?: number;
   x1?: number;
@@ -2175,6 +2176,9 @@ struct CanvasView {
   // images are the pictures drawings draw, decoded once; a repaint runs
   // when one arrives.
   private images: Map<string, image.PixelMap> = new Map();
+  private tintSource: image.PixelMap | undefined;
+  private tintColor: number = 0;
+  private tintImage: image.PixelMap | undefined;
   private loading: Set<string> = new Set();
   private missing: Set<string> = new Set();
 
@@ -2195,6 +2199,34 @@ struct CanvasView {
     ctx.lineTo(x, y + rr);
     ctx.quadraticCurveTo(x, y, x + rr, y);
     ctx.closePath();
+  }
+
+  // tintedImage multiplies the source's RGBA pixels in a separate canvas.
+  private tintedImage(pm: image.PixelMap, tint: number): image.PixelMap {
+    if (this.tintSource === pm && this.tintColor === tint && this.tintImage !== undefined) {
+      return this.tintImage;
+    }
+    const size = pm.getImageInfoSync().size;
+    const ctx = new OffscreenCanvasRenderingContext2D(size.width, size.height,
+      new RenderingContextSettings(true), LengthMetricsUnit.PX);
+    ctx.drawImage(pm, 0, 0, size.width, size.height);
+    const pixels = ctx.getImageData(0, 0, size.width, size.height);
+    const r = tint >>> 24;
+    const g = (tint >>> 16) & 255;
+    const b = (tint >>> 8) & 255;
+    const a = tint & 255;
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      pixels.data[i] = Math.round(pixels.data[i] * r / 255);
+      pixels.data[i + 1] = Math.round(pixels.data[i + 1] * g / 255);
+      pixels.data[i + 2] = Math.round(pixels.data[i + 2] * b / 255);
+      pixels.data[i + 3] = Math.round(pixels.data[i + 3] * a / 255);
+    }
+    ctx.putImageData(pixels, 0, 0);
+    const tinted = ctx.getPixelMap(0, 0, size.width, size.height);
+    this.tintSource = pm;
+    this.tintColor = tint;
+    this.tintImage = tinted;
+    return tinted;
   }
 
   // drawImage draws an image op: at its natural size when W and H are 0,
@@ -2450,7 +2482,8 @@ struct CanvasView {
             this.loadImage(key, uri, data);
             break;
           }
-          this.drawImage(ctx, pm, o);
+          const src = o.tint === undefined || o.tint === 0xffffffff ? pm : this.tintedImage(pm, o.tint);
+          this.drawImage(ctx, src, o);
           break;
         }
       }

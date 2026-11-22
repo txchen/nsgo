@@ -43,7 +43,8 @@ type canvasOp struct {
 	D    []float32 `json:"d,omitempty"`
 	Img  string    `json:"img,omitempty"`
 	// ImgData is the image's bytes, base64, when the drawing embeds them.
-	ImgData string `json:"imgd,omitempty"`
+	ImgData string  `json:"imgd,omitempty"`
+	Tint    *uint32 `json:"tint,omitempty"`
 }
 
 // gradient is a canvas gradient as the host builds one: radial or linear,
@@ -90,6 +91,10 @@ func canvasJSON(ops []driver.DrawOp) string {
 				c.D = append([]float32(nil), (*o.Dash)...)
 			}
 		case driver.DrawImage:
+			if o.Tinted {
+				tint := uint32(o.Color)
+				c.Tint = &tint
+			}
 			if o.Image != nil {
 				c.Img = o.Image.URI
 				if len(o.Image.Data) > 0 {
