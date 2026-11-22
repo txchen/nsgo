@@ -1385,7 +1385,9 @@ func (w *window) apply(b *driver.MountBatch) {
 			w.openURL(it.Value, it.Count)
 			continue
 		case driver.ItemSensor:
-			if it.Sensor.Command != driver.SensorStop {
+			if it.Sensor.Command == driver.SensorStop {
+				cancelWindowsLocation(w, it.Count, it.Sensor.Generation)
+			} else {
 				w.sensorLocation(it.Count, *it.Sensor)
 			}
 			continue

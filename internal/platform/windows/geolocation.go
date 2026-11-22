@@ -4,11 +4,35 @@ package windows
 
 import (
 	"errors"
+	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/nsgo-dev/nsgo/internal/driver"
 )
+
+type windowsGeoRun struct {
+	w       *window
+	id      uint32
+	gen     uint32
+	locator *comObject
+	op      *comObject
+}
+
+var windowsGeoRuns = struct {
+	sync.Mutex
+	m map[*windowsGeoRun]struct{}
+}{m: map[*windowsGeoRun]struct{}{}}
+
+func cancelWindowsLocation(w *window, id, generation uint32) {
+	windowsGeoRuns.Lock()
+	defer windowsGeoRuns.Unlock()
+	for run := range windowsGeoRuns.m {
+		if run.w == w && run.id == id && run.gen == generation {
+			delete(windowsGeoRuns.m, run)
+		}
+	}
+}
 
 var (
 	iidGeolocator          = parseGUID("a9c3bf62-4524-4989-8aa9-de019d2e551f")
@@ -42,13 +66,30 @@ func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
 		w.engine.Dispatch(driver.Event{Kind: driver.EventSensor, Count: id, Data: &driver.SensorReport{Generation: req.Generation, Error: "unavailable", End: true}})
 		return
 	}
+	run := &windowsGeoRun{w: w, id: id, gen: req.Generation, locator: locator}
+	windowsGeoRuns.Lock()
+	windowsGeoRuns.m[run] = struct{}{}
+	windowsGeoRuns.Unlock()
 	var operation *comObject
 	if failed(locator.call(geolocatorGetPosition, uintptr(unsafe.Pointer(&operation)))) || operation == nil {
+		windowsGeoRuns.Lock()
+		delete(windowsGeoRuns.m, run)
+		windowsGeoRuns.Unlock()
 		locator.release()
 		w.engine.Dispatch(driver.Event{Kind: driver.EventSensor, Count: id, Data: &driver.SensorReport{Generation: req.Generation, Error: "unavailable", End: true}})
 		return
 	}
+	run.op = operation
 	completed := newHandler(&iidGeolocationComplete, func(_ uintptr, status unsafe.Pointer) {
+		windowsGeoRuns.Lock()
+		_, active := windowsGeoRuns.m[run]
+		delete(windowsGeoRuns.m, run)
+		windowsGeoRuns.Unlock()
+		if !active {
+			operation.release()
+			locator.release()
+			return
+		}
 		var fix driver.LocationFix
 		var err error
 		if uintptr(status) != geoAsyncCompleted {
@@ -66,8 +107,14 @@ func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
 					if failed(coordinate.call(geoCoordinateLatitude, uintptr(unsafe.Pointer(&lat)))) || failed(coordinate.call(geoCoordinateLongitude, uintptr(unsafe.Pointer(&lon)))) {
 						err = errors.New("geolocation coordinate is invalid")
 					} else {
-						_ = coordinate.call(geoCoordinateAccuracy, uintptr(unsafe.Pointer(&accuracy)))
-						fix = driver.LocationFix{Latitude: lat, Longitude: lon, HorizontalAccuracy: driver.SensorNumber{Value: accuracy, Valid: accuracy >= 0}, Timestamp: time.Now()}
+						accuracyValid := !failed(coordinate.call(geoCoordinateAccuracy, uintptr(unsafe.Pointer(&accuracy))))
+						var rawTimestamp int64
+						timestampValid := !failed(coordinate.call(geoCoordinateTimestamp, uintptr(unsafe.Pointer(&rawTimestamp))))
+						when := time.Now()
+						if timestampValid {
+							when = time.Unix(0, (rawTimestamp-116444736000000000)*100)
+						}
+						fix = driver.LocationFix{Latitude: lat, Longitude: lon, HorizontalAccuracy: driver.SensorNumber{Value: accuracy, Valid: accuracyValid && accuracy >= 0}, Timestamp: when}
 					}
 					coordinate.release()
 				}
