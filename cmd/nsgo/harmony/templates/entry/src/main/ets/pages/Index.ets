@@ -145,6 +145,8 @@ interface Device {
   ScreenReader: boolean;
   Lifecycle: number;
   OpenedURL: string;
+  // CanvasAtlas tells Go this player draws an atlas from one op (case 40).
+  CanvasAtlas: boolean;
 }
 
 // CanvasOp is one drawing operation the engine sent: internal/driver's
@@ -1864,7 +1866,8 @@ struct Index {
       Tablet: deviceInfo.deviceType === 'tablet',
       RTL: i18n.isRTL(locale), ScreenReader: screenReader,
       Lifecycle: AppStorage.get<number>('nsgoLifecycle') ?? 0,
-      OpenedURL: launch.url ?? ''
+      OpenedURL: launch.url ?? '',
+      CanvasAtlas: true
     };
     return JSON.stringify(out);
   }
