@@ -107,6 +107,7 @@ func (c *clicks) down(p driver.Point, v *view) int {
 
 type surface struct {
 	motion motionService
+	location locationService
 	doc    js.Value
 	host   js.Value
 	// simulate is the OS the page runs as (Options.OS).
