@@ -44,12 +44,12 @@ type canvasOp struct {
 	Img  string    `json:"img,omitempty"`
 	// ImgData is the image's bytes, base64, when the drawing embeds them.
 	ImgData string `json:"imgd,omitempty"`
-	// V is a mesh's vertices, x, y, u, v each, in canvas and image points;
-	// VA its triangles' mean alpha, when a vertex color is not opaque white;
-	// and N whether it samples the nearest texel.
+	// V is a mesh's vertices, x, y, u, v each, in canvas and image points; VA its triangles' mean alpha, when a vertex color is not opaque white; and E each triangle's edges shared with another opaque triangle, as meshSeams makes them.
 	V  []float32 `json:"v,omitempty"`
 	VA []float32 `json:"va,omitempty"`
-	N  bool      `json:"n,omitempty"`
+	E  []int     `json:"e,omitempty"`
+	// N is whether an image or mesh samples the nearest texel.
+	N bool `json:"n,omitempty"`
 }
 
 // gradient is a canvas gradient as the host builds one: radial or linear,
@@ -99,10 +99,11 @@ func canvasJSON(ops []driver.DrawOp) string {
 			if draw, ok := o.ImageRect(); ok {
 				c = canvasOp{K: int(driver.DrawImage), X: draw.X, Y: draw.Y, W: draw.W, H: draw.H, X1: draw.X1, Y1: draw.Y1, X2: draw.X2, Y2: draw.Y2}
 			} else if o.Mesh != nil {
-				c = canvasOp{K: c.K, V: meshVertices(o.Mesh.Vertices), VA: meshAlphas(o.Mesh.Vertices), N: o.Sampling == driver.ImageSamplingNearest}
+				c = canvasOp{K: c.K, V: meshVertices(o.Mesh.Vertices), VA: meshAlphas(o.Mesh.Vertices), E: meshSeams(o.Mesh.Vertices)}
 			}
 			fallthrough
 		case driver.DrawImage:
+			c.N = o.Sampling == driver.ImageSamplingNearest
 			if o.Image != nil {
 				c.Img = o.Image.URI
 				if len(o.Image.Data) > 0 {
@@ -132,25 +133,72 @@ func meshVertices(vertices []driver.CanvasVertex) []float32 {
 func meshAlphas(vertices []driver.CanvasVertex) []float32 {
 	var out []float32
 	for i := 0; i+2 < len(vertices); i += 3 {
-		var sum float64
-		for _, v := range vertices[i : i+3] {
-			a := 1.0
-			if v.Color != 0 {
-				_, _, _, a = v.Color.Components()
-			}
-			sum += a
-		}
-		if out == nil && sum < 3 {
+		a := triangleAlpha(vertices[i : i+3])
+		if out == nil && a < 1 {
 			out = make([]float32, i/3, len(vertices)/3)
 			for j := range out {
 				out[j] = 1
 			}
 		}
 		if out != nil {
-			out = append(out, float32(sum/3))
+			out = append(out, a)
 		}
 	}
 	return out
+}
+
+// meshSeams is, for each triangle, bit k set when the edge from its corner k to the next is shared with another triangle, both with opaque vertices; nil when no edge is. The host grows only those edges to hide the seam, so the mesh's outline keeps to its texture coordinates and translucent triangles are never drawn twice over a strip.
+func meshSeams(vertices []driver.CanvasVertex) []int {
+	type edge struct{ a, b driver.Point }
+	edgeOf := func(t, k int) edge {
+		p, q := vertices[3*t+k].Position, vertices[3*t+(k+1)%3].Position
+		if q.X < p.X || (q.X == p.X && q.Y < p.Y) {
+			p, q = q, p
+		}
+		return edge{p, q}
+	}
+	n := len(vertices) / 3
+	shared := map[edge]int{}
+	for t := 0; t < n; t++ {
+		if triangleAlpha(vertices[3*t:3*t+3]) < 1 {
+			continue
+		}
+		for k := 0; k < 3; k++ {
+			shared[edgeOf(t, k)]++
+		}
+	}
+	var out []int
+	for t := 0; t < n; t++ {
+		if triangleAlpha(vertices[3*t:3*t+3]) < 1 {
+			continue
+		}
+		mask := 0
+		for k := 0; k < 3; k++ {
+			if shared[edgeOf(t, k)] > 1 {
+				mask |= 1 << k
+			}
+		}
+		if mask != 0 && out == nil {
+			out = make([]int, n)
+		}
+		if out != nil {
+			out[t] = mask
+		}
+	}
+	return out
+}
+
+// triangleAlpha is the mean alpha of a triangle's vertex colors, the zero color counting as opaque.
+func triangleAlpha(corners []driver.CanvasVertex) float32 {
+	var sum float64
+	for _, v := range corners {
+		a := 1.0
+		if v.Color != 0 {
+			_, _, _, a = v.Color.Components()
+		}
+		sum += a
+	}
+	return float32(sum / 3)
 }
 
 // gradientOf maps a drawing gradient, leaving out what the host cannot play.
