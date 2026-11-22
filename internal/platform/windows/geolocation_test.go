@@ -12,3 +12,25 @@ func TestGeolocatorABIMetadata(t *testing.T) {
 		t.Fatal("Windows geolocation vtable slots changed")
 	}
 }
+
+func TestGeolocationStopDropsStaleGeneration(t *testing.T) {
+	w := &window{}
+	run := &windowsGeoRun{w: w, id: 9, gen: 4}
+	windowsGeoRuns.Lock()
+	windowsGeoRuns.m[run] = struct{}{}
+	windowsGeoRuns.Unlock()
+	cancelWindowsLocation(w, 9, 3)
+	windowsGeoRuns.Lock()
+	_, stillThere := windowsGeoRuns.m[run]
+	windowsGeoRuns.Unlock()
+	if !stillThere {
+		t.Fatal("a stop for an older generation canceled the current request")
+	}
+	cancelWindowsLocation(w, 9, 4)
+	windowsGeoRuns.Lock()
+	_, stillThere = windowsGeoRuns.m[run]
+	windowsGeoRuns.Unlock()
+	if stillThere {
+		t.Fatal("matching stop left the request active")
+	}
+}
