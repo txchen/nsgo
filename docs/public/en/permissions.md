@@ -59,6 +59,8 @@ On Android, each permission must be listed in `nsgo.yaml`'s `android.permissions
 
 `cx.OpenPermissionSettings` opens the page that gives a permission and answers whether one opened: Privacy & Security at the permission's pane on macOS, the app's page in Settings on iOS and Android, and the microphone's or the camera's page on Windows.
 
+For `PermissionLocation` and `PermissionBackgroundLocation`, macOS opens Location Services; `PermissionMotion` opens Motion & Fitness, even though macOS does not supply motion samples. iOS and Android open the app's page for all three. Opening settings neither requests nor grants a permission.
+
 ## Guiding the user
 
 `desktop.GuidePermission` opens that page and waits for the user to give the permission. On macOS a panel follows System Settings' window without taking the focus and, for the panes whose list takes an app dragged into it, holds the app for the user to drag there. It ends, and its function hears the status, once the app has the permission, the user closes the panel or System Settings, `stop` is called or the component goes; a new guide ends the one before.
