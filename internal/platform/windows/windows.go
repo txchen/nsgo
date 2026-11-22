@@ -562,6 +562,8 @@ type window struct {
 	// keyboard. blinking is set while the caret's timer runs; surrogate
 	// holds the first half of a character typed in two WM_CHARs.
 	focus, restore, selecting    *textInput
+	reTimers                     map[uintptr]richEditTimerEntry
+	nextReTimer                  uintptr
 	controlFocus, restoreControl *view
 	// textSelection is the selection of an area, and selected the texts
 	// that highlight a part of it (selection.go).
@@ -1923,7 +1925,7 @@ func (w *window) release(v *view) {
 	w.dropGone(v)
 	if v.field != nil {
 		if w.selecting == v.field {
-			w.fieldUp()
+			w.fieldUp(driver.Point{})
 		}
 		v.field.release()
 	}
@@ -2576,7 +2578,7 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		if lParam&0xffff == htClientArea && (w.hostedCursor() || w.fieldCursor() || w.viewCursor()) {
 			return 1
 		}
-	case wmImeSetContext, wmImeStartComposition, wmImeComposition, wmImeEndComposition:
+	case wmImeSetContext, wmImeStartComposition, wmImeComposition, wmImeEndComposition, wmImeChar, wmImeNotify, wmImeRequest:
 		if r, ok := w.ime(message, wParam, lParam); ok {
 			return r
 		}
@@ -2826,7 +2828,7 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		at := w.point(int32(x), int32(y))
 		w.mouseButtonUp(driver.MouseButtonLeft, at)
 		w.touch(w.fingers.Up(at))
-		if w.fieldUp() || w.selectUp() {
+		if w.fieldUp(at) || w.selectUp() {
 			return 0
 		}
 		if w.barDrag != nil {
@@ -2843,6 +2845,9 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case wmCaptureChanged:
 		if lParam != hwnd && w.selecting != nil {
+			if w.selecting.re != nil {
+				w.selecting.re.sendMessage(wmCaptureChanged, 0, lParam)
+			}
 			w.selecting.drag = dragNone
 			w.selecting = nil
 		}
@@ -2908,6 +2913,8 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			w.longPressed()
 		case passTimer:
 			w.passUnpainted()
+		default:
+			w.richEditTimer(wParam)
 		}
 		return 0
 	case wmKeyDown:
