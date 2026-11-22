@@ -59,6 +59,7 @@ var layers = []struct {
 	{"internal/platform/imageload", []string{"internal/driver"}},
 	{"internal/platform/loopback", []string{"internal/driver"}},
 	{"internal/platform/menutext", []string{"internal/driver", "desktop/locales"}},
+	{"internal/platform/menuspeech", []string{"internal/driver"}},
 	{"internal/platform/objcblock", nil},
 	{"internal/platform/perfhud", []string{"internal/driver", "internal/engine", "internal/platform/apple"}},
 	{"internal/platform/picked", []string{"internal/driver"}},
@@ -126,7 +127,7 @@ var layers = []struct {
 // writers but not the compiler, which only the core links.
 var platformShared = []string{
 	"internal/audiosession", "internal/platform/apple", "internal/platform/canvas2d", "internal/platform/canvasmesh", "internal/platform/canvastest", "internal/platform/codescan", "internal/platform/field", "internal/platform/finger",
-	"internal/platform/appimage", "internal/platform/fontfile", "internal/platform/hover", "internal/platform/imagedecode", "internal/platform/imageload", "internal/platform/loopback", "internal/platform/menutext", "internal/platform/objcblock", "internal/platform/perfhud", "internal/platform/picked", "internal/platform/privacy", "internal/platform/queue", "internal/platform/scrollbar", "internal/platform/speechd",
+	"internal/platform/appimage", "internal/platform/fontfile", "internal/platform/hover", "internal/platform/imagedecode", "internal/platform/imageload", "internal/platform/loopback", "internal/platform/menutext", "internal/platform/menuspeech", "internal/platform/objcblock", "internal/platform/perfhud", "internal/platform/picked", "internal/platform/privacy", "internal/platform/queue", "internal/platform/scrollbar", "internal/platform/speechd",
 	"internal/platform/ops", "internal/platform/textruns", "internal/platform/textselect", "internal/platform/updates", "internal/platform/videoalpha", "internal/platform/viewtree", "internal/platform/webstyle", "internal/shaderir/",
 }
 

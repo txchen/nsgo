@@ -351,7 +351,9 @@ In a game camera or a drag that needs to continue at the screen edge, call `ref.
 
 Call the returned function to release the lock. Escape, a window losing focus, or hiding or removing the view also releases it. Check `cx.Env().CanLockPointer()` to see whether the surface supports it. The web requires a user gesture such as a press. Linux on Wayland requires a compositor that supports pointer constraints and relative motion.
 
-## Speaking text
+## Speaking
+
+On Windows and Linux, Edit → Speech → Start Speaking also reads the selection in a focused web view. The page query is asynchronous; stopping speech, starting another request, navigating or closing the view discards a late result. text
 
 `cx.Speak` reads text aloud in the system's voice for a language where `cx.Env().CanSpeak()` says the platform speaks: macOS, iOS, tvOS, Android, Windows, the web and Linux with speech-dispatcher. One utterance speaks at a time: another `Speak` cuts the one speaking, and so do `cx.StopSpeaking` and the end of the scope that spoke it. `done` hears once how it ended: finished, stopped, or failed with a `core.SpeakError`, such as `core.SpeakLanguageUnavailable` when no voice installed speaks the language.
 

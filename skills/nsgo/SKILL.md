@@ -139,4 +139,4 @@ Use `go tool nsgo publish ios` with a signed IPA or `go tool nsgo publish macos`
 
 ## Reusable components
 
-A library of components follows NSGo's own split between behavior in an unstyled form and a look over it. Read [references/authoring.md](references/authoring.md) before writing components for other apps.
+A library of components follows NSGo's own split between behavior in an unstyled form and a look over it. Read [references/authoring.md](references/authoring.md) before writing components for other apps.- On Windows and Linux, Edit → Speech → Start Speaking reads a focused web view selection asynchronously; late results after stop, a newer request, navigation or disposal are ignored.

@@ -5,6 +5,7 @@ package linux
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"maps"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/nsgo-dev/nsgo/internal/driver"
 	"github.com/nsgo-dev/nsgo/internal/engine"
+	"github.com/nsgo-dev/nsgo/internal/platform/menuspeech"
 )
 
 // WebKitGTK 6.0, the GTK 4 one, loads on the first web view, so apps
@@ -328,6 +330,8 @@ type web struct {
 
 	lastNavigation   driver.WebNavigation
 	navigationQueued bool
+	speechRequest    menuspeech.Request
+	speechMarker     string
 }
 
 // webPage is the window and view a WebKitWebView belongs to.
@@ -920,6 +924,13 @@ func evaluate(page uintptr, script string) {
 	webkitWebViewEvaluateJavascript(page, cstr(script), -1, nil, nil, 0, 0, 0)
 }
 
+func (w *window) speakText(id uint32, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	menuSpeak(id, driver.SpeakRequest{Command: driver.SpeakStart, Lang: w.env.Locale, Text: text}, func(driver.Event) {})
+}
+
 // closeWeb stops v's page, cancels its downloads and lets it go.
 func (w *window) closeWeb(v *view) {
 	wv := v.web
@@ -1336,6 +1347,20 @@ func webMessageCallback(content, value uintptr, data uintptr) {
 	}
 	text, ok := strings.CutPrefix(text, v.web.token)
 	if !ok || v.web.refused {
+		return
+	}
+	if v.web.speechMarker != "" {
+		var answer struct {
+			Marker string `json:"marker"`
+			JSON   string `json:"json"`
+		}
+		if json.Unmarshal([]byte(text), &answer) == nil && answer.Marker == v.web.speechMarker && v.web.speechRequest.Take() {
+			var selected string
+			if json.Unmarshal([]byte(answer.JSON), &selected) == nil && strings.TrimSpace(selected) != "" {
+				v.web.speechMarker = ""
+				w.speakText(menuUtterance, selected)
+			}
+		}
 		return
 	}
 	// The page's top frame posted it: the page last committed, not one the view only started to load.

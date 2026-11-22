@@ -49,6 +49,8 @@ package windows
 
 import (
 	"cmp"
+	"encoding/json"
+	"log"
 	"maps"
 	"net/url"
 	"os"
@@ -62,6 +64,7 @@ import (
 	"unsafe"
 
 	"github.com/nsgo-dev/nsgo/internal/driver"
+	"github.com/nsgo-dev/nsgo/internal/platform/menuspeech"
 )
 
 var webBridge = driver.WebBridge("function (d) { window.chrome.webview.postMessage(d); }")
@@ -82,6 +85,8 @@ type webView struct {
 	cookieRequests map[uint32]func()
 
 	ready, closed bool
+	speechRequest menuspeech.Request
+	speechMarker  string
 	// failed is set when no web view can be made: a placeholder shows.
 	failed bool
 
@@ -295,7 +300,17 @@ func (wv *webView) controllerReady(comp *comObject) {
 	wv.listenDownloads()
 	wv.serveSchemes()
 	wv.listenInput()
-	wv.executed = newHandler(&iidExecuteScriptCompleted, nil)
+	wv.executed = newHandler(&iidExecuteScriptCompleted, func(hr uintptr, result unsafe.Pointer) {
+		if wv.closed || failed(hr) || result == nil {
+			return
+		}
+		var answer struct{ Marker, Text string }
+		if json.Unmarshal([]byte(wideString((*uint16)(result))), &answer) != nil || answer.Marker != wv.speechMarker || answer.Text == "" || !wv.speechRequest.Take() {
+			return
+		}
+		wv.speechMarker = ""
+		wv.w.speakText(menuUtterance, answer.Text)
+	})
 	wv.ready = true
 	wv.paintBackground()
 	wv.shown = false
@@ -1215,6 +1230,20 @@ func (wv *webView) command(c driver.WebCommand, value string, data any) {
 
 func (wv *webView) execute(script string) {
 	wv.web.call(webExecuteScript, uintptr(unsafe.Pointer(wide(script))), wv.executed.ptr())
+}
+
+func (w *window) speakText(id uint32, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	stopSpeaking()
+	code := w.startSpeaking(id, driver.SpeakRequest{Command: driver.SpeakStart, Lang: w.env.Locale, Text: text})
+	if code == driver.SpeakLanguageUnavailable {
+		code = w.startSpeaking(id, driver.SpeakRequest{Command: driver.SpeakStart, Text: text})
+	}
+	if code != "" {
+		log.Printf("nsgo: Start Speaking: %s", code)
+	}
 }
 
 // restyle follows the view's new style.
