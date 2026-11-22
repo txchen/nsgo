@@ -19,6 +19,7 @@ const pixels = require('./pixels.js')
 const goExec = require('./wasm_exec.js')
 const config = require('./config.js')
 const { globalOf, apiOf } = require('./api.js')
+const { updateManager } = require('./updates.js')
 
 // Where each platform loads WebAssembly from the code package: its own
 // object, as WeChat's WXWebAssembly, then the standard one.
@@ -276,6 +277,7 @@ function start(page, host = mpHost()) {
     event: null,
     // The platform's APIs, as WeChat's (api.js).
     api: host.api,
+    updates: updateManager(host.api),
     pixelImages: config.platform === 'wechat' && typeof host.api.createSelectorQuery === 'function',
     pixelBuffer: pixels.buffer,
     showPixels: pixels.show,
