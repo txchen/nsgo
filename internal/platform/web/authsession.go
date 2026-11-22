@@ -15,9 +15,11 @@ import (
 
 // webAuth is a popup an auth session shows.
 type webAuth struct {
-	popup    js.Value
-	redirect string
-	stop     chan struct{}
+	popup     js.Value
+	redirect  string
+	channel   js.Value
+	channelFn js.Func
+	stop      chan struct{}
 }
 
 // webAuths are the sessions by number; the page runs them on one thread.
@@ -43,7 +45,18 @@ func (s *surface) authSession(id uint32, r driver.AuthRequest) {
 			dispatch(driver.AuthEnd(id, driver.AuthFailed, "the browser blocked the sign-in popup: start a session from a press"))
 			return
 		}
-		webAuths[id] = &webAuth{popup: popup, redirect: redirect, stop: make(chan struct{})}
+		a := &webAuth{popup: popup, redirect: redirect, channel: js.Null(), stop: make(chan struct{})}
+		webAuths[id] = a
+		if channel := newAuthChannel(redirect); channel.Truthy() {
+			a.channel = channel
+			a.channelFn = js.FuncOf(func(_ js.Value, args []js.Value) any {
+				if len(args) > 0 {
+					a.callback(id, args[0].Get("data").String(), dispatch)
+				}
+				return nil
+			})
+			channel.Set("onmessage", a.channelFn)
+		}
 		dispatch(driver.Event{Kind: driver.EventAuthSession, Count: id, Data: &driver.AuthEvent{Phase: driver.AuthRedirect, Redirect: redirect}})
 	case driver.AuthOpen:
 		a := webAuths[id]
@@ -70,17 +83,78 @@ func (a *webAuth) follow(id uint32, dispatch func(driver.Event)) {
 		case <-tick.C:
 		}
 		if a.popup.Get("closed").Bool() {
+			// COOP can make an open popup look closed to its opener as soon as
+			// the provider redirects it. Give the redirect page's channel
+			// message a turn before treating this as a user cancellation.
+			select {
+			case <-a.stop:
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+			if webAuths[id] != a {
+				return
+			}
 			a.end(id)
 			dispatch(driver.AuthEnd(id, driver.AuthCancelled, ""))
 			return
 		}
 		href := popupHref(a.popup)
-		if base, _, _ := strings.Cut(strings.SplitN(href, "#", 2)[0], "?"); base == a.redirect {
-			a.end(id)
-			dispatch(driver.Event{Kind: driver.EventAuthSession, Count: id, Data: &driver.AuthEvent{Phase: driver.AuthEnded, Callback: href}})
+		if authRedirectMatches(href, a.redirect) {
+			a.callback(id, href, dispatch)
 			return
 		}
 	}
+}
+
+// callback reports the redirect once. A redirect page can reach this through
+// BroadcastChannel even after its provider's COOP severs the opener link.
+func (a *webAuth) callback(id uint32, href string, dispatch func(driver.Event)) {
+	if webAuths[id] != a || !authRedirectMatches(href, a.redirect) {
+		return
+	}
+	a.end(id)
+	dispatch(driver.Event{Kind: driver.EventAuthSession, Count: id, Data: &driver.AuthEvent{Phase: driver.AuthEnded, Callback: href}})
+}
+
+func authRedirectMatches(href, redirect string) bool {
+	base := strings.SplitN(strings.SplitN(href, "#", 2)[0], "?", 2)[0]
+	redirect = strings.SplitN(strings.SplitN(redirect, "#", 2)[0], "?", 2)[0]
+	return base != "" && base == redirect
+}
+
+func authChannelName(redirect string) string {
+	redirect = strings.SplitN(strings.SplitN(redirect, "#", 2)[0], "?", 2)[0]
+	return "nsgo-auth:" + redirect
+}
+
+func newAuthChannel(redirect string) (channel js.Value) {
+	defer func() {
+		if recover() != nil {
+			channel = js.Null()
+		}
+	}()
+	ctor := js.Global().Get("BroadcastChannel")
+	if ctor.Type() != js.TypeFunction {
+		return js.Null()
+	}
+	return ctor.New(authChannelName(redirect))
+}
+
+// relayAuthRedirect hands a callback back to the opener from the app page at
+// the redirect. It runs on every page load, but sends only a URL with a query
+// or fragment, which is how OAuth providers return a result.
+func relayAuthRedirect() {
+	defer func() { _ = recover() }()
+	loc := js.Global().Get("location")
+	if loc.Get("search").String() == "" && loc.Get("hash").String() == "" {
+		return
+	}
+	channel := newAuthChannel(loc.Get("origin").String() + loc.Get("pathname").String())
+	if !channel.Truthy() {
+		return
+	}
+	channel.Call("postMessage", loc.Get("href").String())
+	channel.Call("close")
 }
 
 // popupHref is where popup is, "" while it shows another origin's page, whose location the page may not read. Reading it throws then, which only a call turns into a panic Go recovers from, so it reads through Reflect.get.
@@ -101,5 +175,11 @@ func (a *webAuth) end(id uint32) {
 	}
 	delete(webAuths, id)
 	close(a.stop)
+	if a.channel.Truthy() {
+		a.channel.Set("onmessage", js.Null())
+		a.channel.Call("close")
+		a.channelFn.Release()
+		a.channel = js.Null()
+	}
 	a.popup.Call("close")
 }

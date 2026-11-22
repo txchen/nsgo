@@ -395,7 +395,7 @@ Face ID apps declare `NSFaceIDUsageDescription` under `apple.info`; Android apps
 
 ## Signing in
 
-`cx.AuthSession` signs the user in with an OAuth provider in the system's authentication session rather than a web view: `ASWebAuthenticationSession` on macOS and iOS, the default browser with a loopback redirect on Windows, Linux and a Mac without a scheme, and a popup on the web. The app keeps the protocol: it makes the PKCE verifier and the state, builds the authorization URL for the redirect it is given, and checks the callback before trading its code. Cancelling is not failing: `errors.Is(err, core.AuthCancelled)` tells the user closing the session, or the returned `cancel` ending it.
+`cx.AuthSession` signs the user in with an OAuth provider in the system's authentication session rather than a web view: `ASWebAuthenticationSession` on macOS and iOS, the default browser with a loopback redirect on Windows, Linux and a Mac without a scheme, and a popup on the web. On the web, the redirect page sends its callback over a same-origin `BroadcastChannel`, so a provider's Cross-Origin-Opener-Policy cannot make the opener mistake a successful redirect for a closed popup; browsers without that channel use the address polling fallback. The app keeps the protocol: it makes the PKCE verifier and the state, builds the authorization URL for the redirect it is given, and checks the callback before trading its code. Cancelling is not failing: `errors.Is(err, core.AuthCancelled)` tells the user closing the session, or the returned `cancel` ending it.
 
 ```go
 verifier, challenge, state := newPKCE() // the app's own
