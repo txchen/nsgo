@@ -1,11 +1,11 @@
 package main
 
 import (
-	"github.com/nsgo-dev/nsgo/icons/lucide"
 	"runtime"
 
 	"github.com/nsgo-dev/nsgo/base/terminal"
 	"github.com/nsgo-dev/nsgo/core"
+	"github.com/nsgo-dev/nsgo/icons/lucide"
 
 	"github.com/nsgo-dev/nsgo/examples/gallery/locales"
 	"github.com/nsgo-dev/nsgo/ui"
@@ -40,6 +40,7 @@ func terminalDemo(cx *core.Scope) core.Node {
 	local := runtime.GOOS != "ios" && runtime.GOOS != "android" && core.Untracked(cx, cx.Env().Desktop)
 	demo := core.NewSignal(cx, !local)
 	keyBar := core.NewSignal(cx, true)
+	clipboardRead, clipboardWrite := core.NewSignal(cx, false), core.NewSignal(cx, false)
 	ref := &terminal.Ref{}
 	// The terminal running, for the cursor's setter.
 	var term *terminal.Terminal
@@ -80,6 +81,7 @@ func terminalDemo(cx *core.Scope) core.Node {
 			}
 			view := terminal.View{Terminal: t, Label: tr.DemoTerminal(), TestID: "terminal", AutoFocus: true, Ref: ref,
 				Theme: th, DarkTheme: th,
+				AllowClipboardRead: clipboardRead.Get(), AllowClipboardWrite: clipboardWrite.Get(),
 				Font:         core.Font{Family: family.Get(), Size: core.Points(size.Get())},
 				Padding:      terminal.Padding{X: core.Points(padX.Get()), Y: core.Points(padY.Get())},
 				OnSizeChange: func(cols, rows int) { cells.Set([2]int{cols, rows}) },
@@ -168,6 +170,10 @@ func terminalDemo(cx *core.Scope) core.Node {
 				},
 				Options: []ui.Option[terminal.CursorStyle]{{Value: terminal.CursorBlock, Label: tr.TerminalBlock()},
 					{Value: terminal.CursorBar, Label: tr.TerminalBar()}, {Value: terminal.CursorUnderline, Label: tr.TerminalUnderline()}}}),
+		}},
+		Section{Title: tr.SystemClipboard(), Note: "AllowClipboardRead · AllowClipboardWrite", Children: []core.Node{
+			SwitchRow{Label: tr.TerminalClipboardRead(), Checked: clipboardRead.Get, OnChange: clipboardRead.Set},
+			SwitchRow{Label: tr.TerminalClipboardWrite(), Checked: clipboardWrite.Get, OnChange: clipboardWrite.Set},
 		}},
 		Section{Title: tr.TerminalKeyBar(), Note: "KeyBarKeys · NoKeyBar", Children: []core.Node{
 			SwitchRow{Label: tr.TerminalKeyBar(), Note: tr.TerminalKeyBarNote(), Checked: keyBar.Get, OnChange: keyBar.Set},

@@ -33,25 +33,26 @@ type Terminal struct {
 
 	// The view, as terminal.View: Theme and DarkTheme name Ghostty's
 	// themes, DarkTheme being Theme when unset.
-	Theme, DarkTheme     func() string
-	FontFamily           func() string
-	FontSize             func() float64
-	PaddingX, PaddingY   func() float64
-	AutoFocus            bool
-	Transparent          bool
-	NoKeyBar             func() bool
-	KeyBarKeys           []string
-	KeyBarClass          string
-	KeyBarStyle          core.Style
-	KeyClass             string
-	KeyStyle             core.Style
-	KeyOnClass           string
-	KeyOnStyle           core.Style
-	OnSizeChange         func(cols, rows int)
-	OnFocus, OnBlur      func()
-	Class, Label, TestID string
-	Style                core.Style
-	Ref                  *Ref
+	Theme, DarkTheme                        func() string
+	FontFamily                              func() string
+	FontSize                                func() float64
+	PaddingX, PaddingY                      func() float64
+	AllowClipboardRead, AllowClipboardWrite func() bool
+	AutoFocus                               bool
+	Transparent                             bool
+	NoKeyBar                                func() bool
+	KeyBarKeys                              []string
+	KeyBarClass                             string
+	KeyBarStyle                             core.Style
+	KeyClass                                string
+	KeyStyle                                core.Style
+	KeyOnClass                              string
+	KeyOnStyle                              core.Style
+	OnSizeChange                            func(cols, rows int)
+	OnFocus, OnBlur                         func()
+	Class, Label, TestID                    string
+	Style                                   core.Style
+	Ref                                     *Ref
 }
 
 // Ref is a Terminal's ref: the view's selection and clipboard, and the
@@ -154,7 +155,7 @@ func (p Terminal) Render(cx *core.Scope) core.Node {
 			Terminal: t, Theme: theme, DarkTheme: dark,
 			Font:      core.Font{Family: read(p.FontFamily), Size: core.Points(num(p.FontSize))},
 			Padding:   terminal.Padding{X: core.Points(num(p.PaddingX)), Y: core.Points(num(p.PaddingY))},
-			AutoFocus: p.AutoFocus, Transparent: p.Transparent,
+			AutoFocus: p.AutoFocus, AllowClipboardRead: p.AllowClipboardRead != nil && p.AllowClipboardRead(), AllowClipboardWrite: p.AllowClipboardWrite != nil && p.AllowClipboardWrite(), Transparent: p.Transparent,
 			Class: p.Class, Style: p.Style, Label: p.Label, TestID: p.TestID,
 			OnFocus: p.OnFocus, OnBlur: p.OnBlur, OnSizeChange: p.OnSizeChange, Ref: &ref.view,
 			KeyBarKeys: p.KeyBarKeys, NoKeyBar: p.NoKeyBar != nil && p.NoKeyBar(),

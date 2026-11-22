@@ -40,6 +40,8 @@ The [gallery](https://nsgo.dev/gallery/) runs a demo of every component in the b
 
 The gallery covers the rest: tables, charts, the code editor, rich text, the terminal, the dock, the command palette, color, date and emoji pickers (`ui.EmojiPicker`), toasts and more. Each has a demo there.
 
+`base/terminal.View` denies program clipboard reads and writes by default. Set `AllowClipboardRead` and `AllowClipboardWrite` only when the app permits them; the requesting view’s `AccessClipboard` still applies. The same props are available on TSX’s `Terminal` and can change without restarting its session. Apps provide consent UI. Explicit user paste independently offers a text/PNG snapshot to programs using the Kitty clipboard protocol (mode 5522); its one-use password can read only that snapshot. Programs without the mode receive ordinary bracketed text. Clipboard image availability follows the platform’s clipboard services; the X11 primary selection is not exposed.
+
 ## Next
 
 - [Components and state](components.md): how a component returns elements and how signals update them.

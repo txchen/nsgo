@@ -2756,6 +2756,8 @@ const (
 	textSystemSensorsFused
 	textDemoEmojiPicker
 	textDemoEmojiPickerDetail
+	textTerminalClipboardRead
+	textTerminalClipboardWrite
 	numTexts
 )
 
@@ -5076,6 +5078,8 @@ var keyOfText = [numTexts]string{
 	"systemSensorsFused",
 	"demoEmojiPicker",
 	"demoEmojiPickerDetail",
+	"terminalClipboardRead",
+	"terminalClipboardWrite",
 }
 
 // textsEn are the messages without arguments in en.
@@ -7393,7 +7397,9 @@ var textsEn = i18n.NewTexts(""+
 	"Accelerometer"+
 	"Fused motion"+
 	"EmojiPicker"+
-	"Search emoji by localized names and choose a skin tone",
+	"Search emoji by localized names and choose a skin tone"+
+	"Program clipboard reads"+
+	"Program clipboard writes",
 	[]uint16{
 		7,
 		7,
@@ -9709,6 +9715,8 @@ var textsEn = i18n.NewTexts(""+
 		12,
 		11,
 		54,
+		23,
+		24,
 	})
 
 // textsZhHans are the messages without arguments in zh-Hans.
@@ -12026,7 +12034,9 @@ var textsZhHans = i18n.NewTexts(""+
 	"加速度计"+
 	"融合运动"+
 	"表情选择器"+
-	"按本地化名称搜索表情并选择肤色",
+	"按本地化名称搜索表情并选择肤色"+
+	"允许程序读取剪贴板"+
+	"允许程序写入剪贴板",
 	[]uint16{
 		6,
 		6,
@@ -14342,6 +14352,8 @@ var textsZhHans = i18n.NewTexts(""+
 		12,
 		15,
 		45,
+		27,
+		27,
 	})
 
 // texts returns the messages without arguments in lang, nil for a
@@ -36923,3 +36935,17 @@ func DemoEmojiPickerDetail(cx *core.Scope) string { return For(cx).DemoEmojiPick
 
 // DemoEmojiPickerDetail is the package's DemoEmojiPickerDetail in the language of msgs.
 func (msgs Messages) DemoEmojiPickerDetail() string { return msgs.text(textDemoEmojiPickerDetail) }
+
+// TerminalClipboardRead says "Program clipboard reads"
+// in the language the app shows under cx.
+func TerminalClipboardRead(cx *core.Scope) string { return For(cx).TerminalClipboardRead() }
+
+// TerminalClipboardRead is the package's TerminalClipboardRead in the language of msgs.
+func (msgs Messages) TerminalClipboardRead() string { return msgs.text(textTerminalClipboardRead) }
+
+// TerminalClipboardWrite says "Program clipboard writes"
+// in the language the app shows under cx.
+func TerminalClipboardWrite(cx *core.Scope) string { return For(cx).TerminalClipboardWrite() }
+
+// TerminalClipboardWrite is the package's TerminalClipboardWrite in the language of msgs.
+func (msgs Messages) TerminalClipboardWrite() string { return msgs.text(textTerminalClipboardWrite) }

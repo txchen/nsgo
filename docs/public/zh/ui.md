@@ -40,6 +40,8 @@ order: 30
 
 gallery 覆盖其余组件：表格、图表、代码编辑器、富文本、终端、Dock、命令面板、颜色、日期与表情选择器（`ui.EmojiPicker`）、Toast 等。每个组件那里都有演示。
 
+`base/terminal.View` 默认拒绝程序读取或写入剪贴板。应用允许后，再设置 `AllowClipboardRead` 和 `AllowClipboardWrite`；仍需通过请求视图的 `AccessClipboard` 权限检查。TSX 的 `Terminal` 也有同名属性，修改它们不会重启会话。授权界面由应用提供。用户主动粘贴时，可独立向使用 Kitty 剪贴板协议（模式 5522）的程序提供文本/PNG 快照；一次性密码只能读取这份快照。未启用该模式的程序仍收到普通括号粘贴文本。剪贴板图像能力取决于平台服务；不提供 X11 主选择区。
+
 ## 下一步
 
 - [组件与状态](components.md)：组件如何返回元素，signal 如何更新它们。

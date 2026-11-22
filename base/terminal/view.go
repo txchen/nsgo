@@ -34,6 +34,10 @@ import (
 // the keyboard leaves of the view.
 type View struct {
 	Terminal *Terminal
+	// AllowClipboardRead and AllowClipboardWrite permit program-initiated reads
+	// and writes (OSC 52 / Kitty), denied by default. Apps own consent UI.
+	// An explicit user paste independently offers only its text/PNG snapshot.
+	AllowClipboardRead, AllowClipboardWrite bool
 	// Font is the terminal's font: the platform's fixed-pitch font at 13
 	// points when its family and size are unset. Bold and italic text
 	// take its variants.
@@ -103,6 +107,7 @@ func (p View) Render(cx *core.Scope) core.Node {
 	}
 	v.cellW, v.cellH = 8, 16
 	if v.t != nil {
+		v.bindClipboard()
 		draw := func() {
 			if !v.pending.Swap(true) {
 				cx.Post(func() {
@@ -194,8 +199,9 @@ type view struct {
 	cx *core.Scope
 	// rev changes when the terminal asks for a frame; pending is a frame
 	// asked for and not yet posted.
-	rev     *core.Signal[int]
-	pending atomic.Bool
+	rev       *core.Signal[int]
+	pending   atomic.Bool
+	clipboard *clipboardHost
 	// sink is what the sink holds, composing what an input method
 	// composes in it, and sent the sink's text the program has.
 	sink, composing *core.Signal[string]
@@ -700,12 +706,8 @@ func (v *view) sinkView() core.Node {
 		NoAutoCorrect:  true,
 		AutoCapitalize: core.AutoCapitalizeNone,
 		PasteBehavior:  core.PasteReport,
-		OnPaste: func(p core.PasteEvent) {
-			if p.Text != "" && v.t != nil {
-				v.t.Paste(p.Text)
-			}
-		},
-		OnChange: v.sinkChanged,
+		OnPaste:        v.pasted,
+		OnChange:       v.sinkChanged,
 		// A software keyboard's Return and Backspace reach no key binding:
 		// Return submits, keeping the keyboard, and Backspace in an empty
 		// sink changes nothing.
@@ -923,6 +925,7 @@ func (v *view) bindKeys(cx *core.Scope) {
 	if apple {
 		bind("meta+c", v.copy)
 		bind("meta+a", v.selectAll)
+		bind("meta+v", v.paste)
 		return
 	}
 	bind("ctrl+shift+c", v.copy)
