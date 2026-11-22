@@ -34,6 +34,8 @@ Go 1.27.3 or later builds every target from a Mac, with Xcode for Apple's; nothi
 
 For a signed HarmonyOS HAP, configure `harmonyos.signing` and use the SDK, Java and environment passwords described in [Building](https://nsgo.dev/docs/building/#harmonyos).
 On `ios_simulator`, Go-only dev rebuilds of the main app replace the installed executable and relaunch. Changes to the app's resources, icon or `nsgo.yaml` reinstall it. [Running and debugging](https://nsgo.dev/docs/debugging.md)
+For terminal apps, use `go tool nsgo dev -target tui` and `go tool nsgo test -target tui` in an interactive terminal with `nsgotest.Main`. Choose cell-sized styles explicitly (8×16 points per cell); Control is `mod` on every host. Diagnostics go to `.nsgo/tui.log`; media/canvas/native hosted views are not implemented. [Terminal targets](https://nsgo.dev/docs/building.md#terminal)
+
 ## Writing an app
 
 ```go

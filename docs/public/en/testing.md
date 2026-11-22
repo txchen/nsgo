@@ -138,6 +138,8 @@ To measure rather than check, start with `nsgotest.Measure()`: the app runs on t
 
 Put NSGo flags before the directory: `go tool nsgo test -target web ./app`, not after it. For headless runs, flags after `--` go to `go test`. Target runs support `-short`, `-count`, `-cpu`, `-parallel`, `-failfast` and `-fullpath` there, for example `go tool nsgo test -target web ./app -- -short -count=3`; they reject other Go test flags explicitly, `-run` and `-timeout` included, which go before the directory there. `-count=0` runs no tests. Tests that link NSGo's native host repeat in fresh processes for each count and CPU setting, with `[run N]` in their results, screenshots in `run-N` subdirectories and a timeout per invocation; libraries keep Go's in-process repetitions.
 
+On `tui`, tests require an interactive terminal, a linked NSGo backend and `TestMain` calling `nsgotest.Main`. Each process opens one application; its steps exercise terminal editing, focus, mouse and key routing. The test output is buffered until the terminal has been restored. PNG captures render the cells with a portable fixed face. [Terminal targets](building.md#terminal)
+
 ## TSX tests
 
 A TSX app's `*.test.tsx` files, written with `nsgo/test`, run with its Go tests.
