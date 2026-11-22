@@ -51,6 +51,14 @@ type View struct {
 	Transparent bool
 	// HideIndicator hides the scroll bar; the scrollback still scrolls.
 	HideIndicator bool
+	// MouseReporting allows programs to capture the mouse when they request
+	// it; nil means true. Turning it off leaves selection and scrolling to
+	// the view. Shift also bypasses mouse capture for selection.
+	MouseReporting func() bool
+	// MouseScrollMultiplier scales wheel reports and alternate-screen
+	// arrow keys, separately for touchpads and discrete wheels. It does
+	// not change the platform's ordinary scrollback scrolling.
+	MouseScrollMultiplier MouseScrollMultiplier
 	// Class is Tailwind CSS classes, as core.View's, under Style.
 	Class string
 	Style core.Style
@@ -121,6 +129,9 @@ func (p View) Render(cx *core.Scope) core.Node {
 			if v.keys != nil {
 				v.keys.Free()
 			}
+			if v.mouse != nil {
+				v.mouse.Free()
+			}
 			v.t.mu.Unlock()
 		})
 	}
@@ -147,26 +158,7 @@ func (p View) Render(cx *core.Scope) core.Node {
 					core.Scroll{
 						Ref: v.scrollRef, Style: fill, TestID: v.testID("scroll"), OnScroll: v.scrolled, Behavior: keepKeyboard,
 						HideIndicator: p.HideIndicator,
-						Children: []core.Node{core.View{
-							StyleFunc: func() core.Style {
-								cursor := core.CursorText
-								if v.linkOn.Get() {
-									cursor = core.CursorPointer
-								}
-								return core.Style{Height: core.Pt(v.content.Get()), Cursor: cursor}
-							},
-							NoFocus:      true,
-							TestID:       v.testID("screen"),
-							OnPressDown:  v.pressDown,
-							OnPressUp:    v.pressUp,
-							OnMouseMove:  v.mouseMove,
-							OnMouseLeave: v.mouseLeave,
-							OnLongPress:  v.longPress,
-							// A scroll view holds its content's touches back
-							// 150 ms: the word is selected before a context
-							// menu's hold of 400 ms opens it.
-							DelayLongPress: 200 * time.Millisecond,
-						}},
+						Children:      []core.Node{v.hitView()},
 					},
 					v.sinkView(),
 				}},
@@ -232,10 +224,14 @@ type view struct {
 	scrollY, setY float64
 
 	// Guarded by the terminal's mu.
-	keys      *vt.KeyEncoder
-	gesture   *vt.Gesture
-	selecting bool
-	extending bool
+	keys  *vt.KeyEncoder
+	mouse *vt.MouseEncoder
+	// mouseHeld are the buttons whose press was reported to the program.
+	mouseHeld      uint8
+	wheelX, wheelY float64
+	gesture        *vt.Gesture
+	selecting      bool
+	extending      bool
 	// lastMouse is where the pointer was in the scroll layer's content
 	// while it selects.
 	lastMouse core.Point
@@ -975,6 +971,7 @@ func (v *view) cellAt(p core.Point) (col, row int, px, py float64) {
 
 func (v *view) pressDown(e core.PressEvent) {
 	v.sinkRef.Focus()
+	enabled := v.mouseEnabled()
 	t := v.t
 	if t == nil {
 		return
@@ -991,6 +988,9 @@ func (v *view) pressDown(e core.PressEvent) {
 			v.pressedLink = l.url
 			return
 		}
+	}
+	if enabled && t.term.MouseTracking() && !e.Modifiers.Shift {
+		return
 	}
 	v.hovered = false
 	v.findLink()
@@ -1019,6 +1019,7 @@ func (v *view) mouseMove(e core.MouseEvent) {
 	if t == nil {
 		return
 	}
+	v.reportMotion(e)
 	if v.selecting {
 		v.lastMouse = e.Position
 		t.mu.Lock()

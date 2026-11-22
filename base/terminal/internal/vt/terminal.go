@@ -16,6 +16,10 @@ import (
 type Terminal struct {
 	h  uintptr
 	id uintptr
+	// modeVersion invalidates encoder options after output or an explicit
+	// mode/reset call. Mode bits alone omit which enabled format was last
+	// selected by the program.
+	modeVersion uint64
 	// Effects are called during Write, on its goroutine; they must not
 	// call Write.
 	effects Effects
@@ -226,6 +230,7 @@ func (t *Terminal) Free() {
 // Write processes output of the program.
 func (t *Terminal) Write(p []byte) {
 	if len(p) > 0 {
+		t.modeVersion++
 		// A read that was deferred but whose refusal never came, as of a
 		// library of another version, is stale.
 		t.deferred = nil
@@ -260,7 +265,10 @@ func (t *Terminal) Cursor() (x, y int) {
 }
 
 // Reset resets the terminal fully (RIS).
-func (t *Terminal) Reset() { call(fnTerminalReset, t.h) }
+func (t *Terminal) Reset() {
+	t.modeVersion++
+	call(fnTerminalReset, t.h)
+}
 
 // SetColors sets the default colors, which programs may change: the
 // foreground, the background, the cursor's (nil for the text's) and the
@@ -352,12 +360,14 @@ func (t *Terminal) Mode(m Mode) bool {
 
 // SetMode sets a mode.
 func (t *Terminal) SetMode(m Mode, v bool) {
+	t.modeVersion++
 	c := modeConfig{mode: uint16(m), value: v}
 	t.set(optMode, unsafe.Pointer(&c))
 }
 
 // SetModeDefault sets a mode, and the value a reset restores.
 func (t *Terminal) SetModeDefault(m Mode, v bool) {
+	t.modeVersion++
 	c := modeConfig{mode: uint16(m), value: v}
 	t.set(optModeDefault, unsafe.Pointer(&c))
 }

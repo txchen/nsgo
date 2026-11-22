@@ -39,6 +39,9 @@ type Terminal struct {
 	PaddingX, PaddingY   func() float64
 	AutoFocus            bool
 	Transparent          bool
+	MouseReporting       func() bool
+	MouseScrollPrecision func() float64
+	MouseScrollDiscrete  func() float64
 	NoKeyBar             func() bool
 	KeyBarKeys           []string
 	KeyBarClass          string
@@ -155,7 +158,9 @@ func (p Terminal) Render(cx *core.Scope) core.Node {
 			Font:      core.Font{Family: read(p.FontFamily), Size: core.Points(num(p.FontSize))},
 			Padding:   terminal.Padding{X: core.Points(num(p.PaddingX)), Y: core.Points(num(p.PaddingY))},
 			AutoFocus: p.AutoFocus, Transparent: p.Transparent,
-			Class: p.Class, Style: p.Style, Label: p.Label, TestID: p.TestID,
+			MouseReporting:        p.MouseReporting,
+			MouseScrollMultiplier: terminal.MouseScrollMultiplier{Precision: num(p.MouseScrollPrecision), Discrete: num(p.MouseScrollDiscrete)},
+			Class:                 p.Class, Style: p.Style, Label: p.Label, TestID: p.TestID,
 			OnFocus: p.OnFocus, OnBlur: p.OnBlur, OnSizeChange: p.OnSizeChange, Ref: &ref.view,
 			KeyBarKeys: p.KeyBarKeys, NoKeyBar: p.NoKeyBar != nil && p.NoKeyBar(),
 			KeyBarClass: p.KeyBarClass, KeyBarStyle: p.KeyBarStyle,
@@ -166,6 +171,7 @@ func (p Terminal) Render(cx *core.Scope) core.Node {
 
 func init() {
 	tsx.Register("nsgo/base", map[string]core.Node{"Terminal": Terminal{}},
+		tsx.Default("MouseReporting", true),
 		tsx.Enum(map[string]terminal.CursorStyle{"block": terminal.CursorBlock, "bar": terminal.CursorBar, "underline": terminal.CursorUnderline}),
 		// It starts programs, past any capability, so it is not SandboxSafe.
 		tsx.Event("OnTitle", "title"), tsx.Event("OnExit", "code"), tsx.Event("OnSizeChange", "cols", "rows"),
