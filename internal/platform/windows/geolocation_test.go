@@ -2,7 +2,11 @@
 
 package windows
 
-import "testing"
+import (
+	"sync/atomic"
+	"syscall"
+	"testing"
+)
 
 func TestGeolocatorABIMetadata(t *testing.T) {
 	if iidGeolocator != parseGUID("a9c3bf62-4524-4989-8aa9-de019d2e551f") || iidGeolocationComplete != parseGUID("7668a704-244e-5e12-8dcb-92a3299eba26") || iidPositionHandler != parseGUID("df3c6164-4e7b-5e8e-9a7e-13da059dec1e") {
@@ -32,5 +36,25 @@ func TestGeolocationStopDropsStaleGeneration(t *testing.T) {
 	windowsGeoRuns.Unlock()
 	if stillThere {
 		t.Fatal("matching stop left the request active")
+	}
+}
+
+func TestGeolocationStopCallsAsyncCancel(t *testing.T) {
+	var canceled atomic.Int32
+	fakeCancel := syscall.NewCallback(func(uintptr) uintptr { canceled.Add(1); return 0 })
+	fakeRelease := syscall.NewCallback(func(uintptr) uintptr { return 0 })
+	var opTable [128]uintptr
+	opTable[2], opTable[9] = fakeRelease, fakeCancel
+	// A one-shot operation is retained until its late completion releases it;
+	// Stop must call IAsyncInfo.Cancel instead of releasing it underneath that
+	// callback.
+	w := &window{}
+	run := &windowsGeoRun{w: w, id: 12, gen: 7, locator: &comObject{vtbl: &opTable}, op: &comObject{vtbl: &opTable}}
+	windowsGeoRuns.Lock()
+	windowsGeoRuns.m[run] = struct{}{}
+	windowsGeoRuns.Unlock()
+	cancelWindowsLocation(w, 12, 7)
+	if canceled.Load() != 1 {
+		t.Fatalf("IAsyncInfo.Cancel calls = %d, want 1", canceled.Load())
 	}
 }
