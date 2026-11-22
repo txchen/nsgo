@@ -360,6 +360,8 @@ func (s *surface) serve(app engine.App, opts Options, test *testOpen) {
 				ev.Data = readPicked(data)
 			case driver.EventSpeak:
 				ev.Data, ev.Text, ev.Index = readSpeak(ev, data), "", 0
+			case driver.EventAuthSession:
+				ev.Data, ev.Text, ev.Index = readAuthSession(ev, data), "", 0
 			case driver.EventFiles:
 				if s.pickedFolders(answerKey(from, ev.Count)) {
 					ev.Data = s.readFolders(data)
@@ -1001,7 +1003,7 @@ func (s *surface) Mount(b *driver.MountBatch) {
 
 // mount sends the batch of v's tree to Java, which names its surface, and loads the image sources it changed.
 func (s *surface) mount(v *treeView, b *driver.MountBatch) {
-	b = withoutOffscreenReleases(s.withoutScans(v.id, s.withoutWebCookies(v.id, s.withoutAuthSessions(v.id, s.withoutPermissions(v.id, s.withoutUpdateChecks(v.id, withoutDesktopItems(withoutEffects(b))))))))
+	b = withoutOffscreenReleases(s.withoutScans(v.id, s.withoutWebCookies(v.id, s.withoutPermissions(v.id, s.withoutUpdateChecks(v.id, withoutDesktopItems(withoutEffects(b)))))))
 	// Disk space uses a separate message and runs on a worker. Android has no file manager an app can reveal in or trash through. A test's observer may hold the batch, so filter these items from a copy.
 	outsideBatch := func(it driver.MountItem) bool {
 		return it.Kind == driver.ItemRevealFile || it.Kind == driver.ItemTrashFile || it.Kind == driver.ItemDiskSpace
@@ -1547,6 +1549,8 @@ func encode(w *writer, b *driver.MountBatch, first bool, requests []uint32, nati
 			w.str(r.Voice)
 			w.float(r.Rate)
 			w.float(r.Pitch)
+		case driver.ItemAuthSession:
+			writeAuthRequest(w, it.Count, it.Auth)
 		case driver.ItemBiometricAvailability:
 			w.u32(it.Count)
 		case driver.ItemBiometricAuthenticate:

@@ -85,6 +85,8 @@ protected void onActivityResult(int request, int result, Intent data) {
 }
 ```
 
+For Android authentication sessions in an embedded host, declare the private callback scheme on the hosting Activity and forward the links that Activity accepts to `view.openLink(uri.toString())` in `onNewIntent` (and a fresh `onCreate`). A matching active session consumes its callback; other links reach `OnOpenLinks`. The standalone `NsgoActivity` forwards them itself.
+
 ## Desktop
 
 A Go host runs the platform's event loop and puts each view's `Handle` in its window. `nsgo.NewView` starts the app once the handle is in a window, so settings made before are in its first frame.

@@ -229,6 +229,13 @@ final class Protocol {
     static final int IMAGE_PLACEHOLDER = 0;
     static final int IMAGE_SOURCE = 1;
 
+    // Authentication commands and reply phases, as driver/auth.go defines them.
+    static final int AUTH_START = 0;
+    static final int AUTH_OPEN = 1;
+    static final int AUTH_CANCEL = 2;
+    static final int AUTH_REDIRECT = 0;
+    static final int AUTH_ENDED = 1;
+
     // Mount item kinds, as in core/mount.go.
     static final int ITEM_CREATE = 1;
     static final int ITEM_INSERT = 2;
@@ -308,6 +315,7 @@ final class Protocol {
     static final int ITEM_KEEP_AWAKE = 93;
     static final int ITEM_RELEASE_AWAKE = 94;
     static final int ITEM_SPEAK = 102;
+    static final int ITEM_AUTH_SESSION = 97;
     static final int ITEM_SENSOR = 103;
     static final int ITEM_ORIENTATION = 111;
 
@@ -422,6 +430,7 @@ final class Protocol {
     static final int EVENT_BIOMETRIC = 78;
     static final int EVENT_OVERLAY_PERMISSION = 80;
     static final int EVENT_OPEN_LINKS = 87;
+    static final int EVENT_AUTH_SESSION = 86;
     static final int EVENT_SPEAK = 90;
 
     static final int EVENT_SAVE_PREFLIGHT = 99;

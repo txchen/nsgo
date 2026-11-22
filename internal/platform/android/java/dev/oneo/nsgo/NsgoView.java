@@ -791,6 +791,7 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
      * Lets go of what serves the app's process once it ends or the view stops, on the UI thread: the network callback, the decoders, back and the native components, as an ended app sends no deletes. It runs again harmlessly.
      */
     private void release() {
+        AuthSession.dispose(this);
         measuring = false;
         if (perfPanel != null) {
             getOverlay().remove(perfPanel);
@@ -3148,6 +3149,10 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
                 Speaker.handle(this, count, command, text, lang, voice, rate, pitch);
                 break;
             }
+            case Protocol.ITEM_AUTH_SESSION: {
+                AuthSession.read(this, in);
+                break;
+            }
             case Protocol.ITEM_BIOMETRIC_AUTHENTICATE: {
                 long count = in.readInt() & 0xffffffffL;
                 authenticateBiometric(count, Protocol.readString(in));
@@ -4405,13 +4410,25 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
     private final ArrayList<String> linksEarly = new ArrayList<>();
     private final ArrayList<String> sharesEarly = new ArrayList<>();
 
-    /** Reports a URL opened by Android, after the engine's first batch if it is still starting. */
-    void openLink(String link) {
+    /**
+     * Delivers an app-owned URL from an Activity's onNewIntent/onCreate.
+     * An embedded host forwards links it accepts here too. The active
+     * authentication callback is consumed before ordinary open-link events.
+     */
+    public void openLink(String link) {
+        if (link == null) return;
+        if (AuthSession.redirect(this, link)) return;
         if (!mounted) {
             linksEarly.add(link);
             return;
         }
         event(Protocol.EVENT_OPEN_LINKS, 0, 0, 0, 0, link);
+    }
+
+    /** The two-phase authentication reply: redirect, or error and callback/message. */
+    void authSessionEvent(long id, int phase, String text, String data) {
+        event(Protocol.EVENT_AUTH_SESSION, 0, id, 0, 0, text, 0, 0, phase,
+                0, 0, 0, 0, null, 0, 0, false, data, false);
     }
 
     /** Gives one incoming share to the engine after it has started. */
