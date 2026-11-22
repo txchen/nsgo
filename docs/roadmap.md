@@ -239,7 +239,6 @@ What `base/formula` still lacks ([formulas](architecture/components.md#formulas)
 | Item | Reference | Done when |
 | --- | --- | --- |
 | Copying formulas on Android | `text.md` (Text selection), [#1440](https://github.com/nsgo-dev/nsgo/issues/1440) | Android's selection copies an attachment as its span's `Copy`, as the other backends do; `Selection.java` leaves attachments out now |
-| Formulas in TSX | `tsx.md`, [#1441](https://github.com/nsgo-dev/nsgo/issues/1441) | TSX registers `formula.View`, its `TextView` takes `renderMath`, and the TSX gallery's TextView page typesets its formulas |
 | Formulas in mini programs | `miniprogram.md`, [#1442](https://github.com/nsgo-dev/nsgo/issues/1442) | A mini program shows formulas within the platforms' 2 MB package: Untie's code alone, about 6 MB natively, is past it before its 1.4 MB font |
 | Formulas on watchOS | [#1443](https://github.com/nsgo-dev/nsgo/issues/1443) | The gallery's formulas show in the watch simulator with the memory they take read, Untie's code, its font and the font's parsed copy, against what a watch has; unmeasured now |
 | Display formulas that break | Untie's `Style.MaxWidth` and `Box.Lines`, [#1444](https://github.com/nsgo-dev/nsgo/issues/1444) | A display formula wider than its view breaks at its relations and operators rather than scroll |

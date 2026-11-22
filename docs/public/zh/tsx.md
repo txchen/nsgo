@@ -39,6 +39,17 @@ mount(App);
 
 TSX 从 `nsgo` 导入基本元素，从 `nsgo/base` 导入 `base` 的组件，从 `nsgo/gamepad` 读取游戏手柄（签名包需声明 `gamepad` 权限）；应用导入 `tsx/ui` 后，还能从 `nsgo/ui` 导入 `ui` 的组件；`examples/gallery-tsx` 展示了这些组件。
 
+在 Go 宿主中副作用导入 `github.com/nsgo-dev/nsgo/tsx/formula`，并导入 `tsx/textview` 或 `tsx/ui`，即可从 `nsgo/base` 使用排版后的 `Formula`；未导入该包的应用不会链接数学引擎和字体。它接受 `source`、`dialect`（默认为 `tex`，也可设为 `typst`）、`display`、`accessibilityLabel` 和样式属性，字号和颜色继承周围的文本。可以直接使用，也可以给 TextView 提供渲染函数：
+
+```tsx
+import { Formula, TextView } from "nsgo/base";
+
+<TextView markdown={markdown}
+  renderMath={(math) => <Formula source={math.tex} display={math.display} />} />
+```
+
+`nsgo/ui` 的 TextView 也接受相同的 `renderMath`；复制公式时仍得到 TeX。Go 的 `Renderer` 由宿主配置。
+
 ## 在 TSX 中使用 Go
 
 注册 Go 代码供 TSX 导入：

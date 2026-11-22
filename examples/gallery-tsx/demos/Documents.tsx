@@ -1,5 +1,5 @@
-import { signal, Text, View } from "nsgo";
-import { Editor } from "nsgo/base";
+import { Scroll, signal, Text, View } from "nsgo";
+import { Editor, Formula } from "nsgo/base";
 import { DiffView, TextView } from "nsgo/ui";
 import { BoolKnob, ChoiceKnob, NumberKnob, StagePage, Status } from "../parts";
 
@@ -115,14 +115,28 @@ fmt.Println("hello")
 \`\`\`
 
 > A quotation, for good measure.
+
+## Formulas
+
+Inline energy: $E=mc^2$.
+
+$$
+\\frac{1}{2}
+$$
 `;
 
 export function TextViewDemo() {
   const selectable = signal(true);
   return (
     <StagePage panel={<BoolKnob name="Selectable" value={selectable} />}>
-      <View class="flex-1 overflow-hidden rounded-lg border border-border bg-surface p-4">
-        <TextView testID="textview" class="flex-1" markdown={markdown} selectable={selectable()} />
+      <View class="flex-1 overflow-hidden rounded-lg border border-border bg-surface">
+        <Scroll testID="textview-scroll" class="flex-1">
+          <View class="p-4">
+            <TextView testID="textview" markdown={markdown} selectable={selectable()}
+              renderMath={(math) => <Formula testID={math.display ? "textview-display-math" : "textview-inline-math"}
+                source={math.tex} display={math.display} />} />
+          </View>
+        </Scroll>
       </View>
     </StagePage>
   );
