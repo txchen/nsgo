@@ -33,13 +33,15 @@ func cancelWindowsLocation(w *window, id, generation uint32) {
 		if run.w == w && run.id == id && run.gen == generation {
 			delete(windowsGeoRuns.m, run)
 			if run.handler != nil {
-				run.locator.call(geoRemovePositionChanged, uintptr(unsafe.Pointer(&run.token)))
+				run.locator.call(geoRemovePositionChanged, uintptr(run.token.value))
 				run.handler.release()
+				run.locator.release()
 			}
 			if run.op != nil {
-				run.op.release()
+				run.op.call(geoAsyncCancel)
+			} else if run.handler == nil {
+				run.locator.release()
 			}
-			run.locator.release()
 		}
 	}
 }
@@ -66,6 +68,7 @@ const (
 	geoCoordinateTimestamp   = 13
 	geoAddPositionChanged    = 15
 	geoRemovePositionChanged = 16
+	geoAsyncCancel           = 9
 	geoRequestAccess         = 6
 )
 
@@ -167,6 +170,9 @@ func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
 	hr := operation.call(geoAsyncPutCompleted, completed.ptr())
 	completed.release()
 	if failed(hr) {
+		windowsGeoRuns.Lock()
+		delete(windowsGeoRuns.m, run)
+		windowsGeoRuns.Unlock()
 		operation.release()
 		locator.release()
 		w.engine.Dispatch(driver.Event{Kind: driver.EventSensor, Count: id, Data: &driver.SensorReport{Generation: req.Generation, Error: "unavailable", End: true}})
