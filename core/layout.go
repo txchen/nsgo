@@ -590,6 +590,9 @@ func (t *Tree) layoutRoot(root *node, space Size, fill bool) {
 // syncFrames sets the frames of n's children from their layouts, and
 // what depends on them, through n's subtree. n's own frame is set.
 func (t *Tree) syncFrames(n *node) {
+	if end := n.owner.BeginWork(); end != nil {
+		defer end()
+	}
 	t.syncContent(n)
 	n.layoutDirty = false
 	n.synced = n.lstate.Rounds()
