@@ -11,9 +11,9 @@ import (
 
 // Scroll behavior: content insets widen the offsets, NoScroll keeps the
 // wheel and the bar out, and snapping views settle on a snap point once
-// the wheel rests or the bar is let go, as NSH's desktops do. Windows
-// scrolls with the wheel and the bar only, so bounces, deceleration,
-// pull to refresh, the keyboard props and zooming do nothing here.
+// the wheel rests or the bar is let go, as NSH's desktops do. Touchscreen
+// fingers follow the shared touch motion. The keyboard props and zooming
+// do nothing here.
 
 // scrollEvent reports kind on scroll view v at its offset, if it listens.
 func (w *window) scrollEvent(v *view, kind driver.EventKind) {
@@ -59,30 +59,22 @@ func (w *window) wheelTurned(v *view, d driver.Points) {
 // motion, a glide, a snap, an animated scroll or the wheel: it reports
 // EventScrollEnd, and the snapping diff clamps that follow v settle.
 func (w *window) restScroll(v *view) {
-	w.scrollEvent(v, driver.EventScrollEnd)
-	w.animator.Settle(v.id)
-	if w.animator.Running() {
-		w.startClock()
-	}
+	scrollbar.Rest(w.animator, v.id, func() { w.scrollEvent(v, driver.EventScrollEnd) }, w.startClock)
 }
 
 // settle moves snapping view v to where it rests after the user let it
 // go at velocity (points per millisecond along its axis).
 func (w *window) settle(v *view, velocity float32) {
-	to, ok := scrollbar.Settle(&v.scroll, v.frame.Size, v.size, v.offset, velocity)
-	if !ok || to == v.offset {
-		w.restScroll(v)
-		return
+	host := scrollbar.SettleHost{
+		Scroll: func(to driver.Point) { w.scrollTo(v, to) },
+		Animate: func(to driver.Point) {
+			v.scrolling = &scrolling{from: v.offset, to: to, start: time.Now(), momentum: true}
+			w.animate(v)
+		},
+		Event: func(kind driver.EventKind) { w.scrollEvent(v, kind) },
+		Rest:  func() { w.restScroll(v) },
 	}
-	w.scrollEvent(v, driver.EventMomentumStart)
-	if w.env.ReduceMotion {
-		w.scrollTo(v, to)
-		w.scrollEvent(v, driver.EventMomentumEnd)
-		w.restScroll(v)
-		return
-	}
-	v.scrolling = &scrolling{from: v.offset, to: to, start: time.Now(), momentum: true}
-	w.animate(v)
+	host.Settle(&v.scroll, v.frame.Size, v.size, v.offset, velocity, w.env.ReduceMotion)
 }
 
 // releaseBar ends dragging the scroll bar: a snapping view settles.

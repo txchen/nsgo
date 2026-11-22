@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nsgo-dev/nsgo/internal/driver"
+	"github.com/nsgo-dev/nsgo/internal/platform/scrollbar"
 )
 
 var (
@@ -423,11 +424,7 @@ func (w *window) startClock() {
 // pass, where a report that woke it on its own cost a second pass and
 // commit every frame of an app scrolling in its frames.
 func (w *window) reportScroll(ev driver.Event) {
-	if w.frameWanted.Load() {
-		w.engine.DispatchBeforeFrame(ev)
-	} else {
-		w.engine.Dispatch(ev)
-	}
+	scrollbar.Report(w.engine, ev, w.frameWanted.Load())
 }
 
 // ticked runs the frame the clock posted.
