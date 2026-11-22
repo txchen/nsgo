@@ -23,6 +23,7 @@ Use `ui`'s component whenever one exists: it is `base`'s control with NSGo's loo
 
 ## Using them well
 
+- On Windows and Linux, `cx.AuthSession` with `AuthSessionOptions.Scheme` needs the same `url_schemes` declaration in `nsgo.yaml`; leave `Scheme` empty for loopback. Keep PKCE and state validation in the app, give browser sessions a timeout or cancel button, and use distinct callback paths for simultaneous sessions.
 - Use `ui.ShellTab.TextFunc` and `ui.TabShell.LabelFunc` for a changing tab title and bar name, and set `Edge` (`mobile.TabBarLeading`, `mobile.TabBarTrailing` or `mobile.TabBarAutomatic`, reading `core.Env.VerticalBarEdge`) on `mobile.TabBar` or `ui.TabShell` to place the bar vertically along an edge.
 - Set `tabBarBackground`, `tabBarIdle`, `tabBarSelected` and `tabBarIndicator` as Android `mobile.TabBar` palette roles. A custom palette uses `Accent` for selected content by default.
 

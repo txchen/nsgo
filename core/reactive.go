@@ -247,6 +247,9 @@ type runtime struct {
 	// opens hear the files the system opens with the app, and links the app's own links (desktop.OnOpenLinks).
 	opens, links openQueue[string]
 	shares       openQueue[[]driver.SharedItem]
+	// authLinks claim the private redirect URIs whose callbacks arrive as
+	// open links, including sessions started in an opened surface.
+	authLinks map[string]*authSession
 	// dock is the app icon's menu, the one a surface set last.
 	dock     dockMenu
 	trays    map[uint32]*Tray

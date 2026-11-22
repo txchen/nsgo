@@ -942,7 +942,7 @@ func (t *Tree) surfaceEvent(ev driver.Event) bool {
 		t.within(t.root, func() { rt.opens.open(rt, paths) })
 	case driver.EventOpenLinks:
 		links, _ := ev.Data.([]string)
-		t.within(t.root, func() { rt.links.open(rt, links) })
+		t.within(t.root, func() { rt.links.open(rt, rt.openAuthLinks(links)) })
 	case driver.EventShared:
 		if items, _ := ev.Data.([]driver.SharedItem); len(items) != 0 {
 			t.within(t.root, func() { rt.shares.open(rt, [][]driver.SharedItem{items}) })
