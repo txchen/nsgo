@@ -42,14 +42,16 @@ func TestGeolocationStopDropsStaleGeneration(t *testing.T) {
 func TestGeolocationStopCallsAsyncCancel(t *testing.T) {
 	var canceled atomic.Int32
 	fakeCancel := syscall.NewCallback(func(uintptr) uintptr { canceled.Add(1); return 0 })
+	fakeClose := syscall.NewCallback(func(uintptr) uintptr { return 0 })
 	fakeRelease := syscall.NewCallback(func(uintptr) uintptr { return 0 })
-	var opTable [128]uintptr
-	opTable[2], opTable[9] = fakeRelease, fakeCancel
+	var infoTable [128]uintptr
+	infoTable[2], infoTable[9], infoTable[10] = fakeRelease, fakeCancel, fakeClose
+	info := &comObject{vtbl: &infoTable}
 	// A one-shot operation is retained until its late completion releases it;
 	// Stop must call IAsyncInfo.Cancel instead of releasing it underneath that
 	// callback.
 	w := &window{}
-	run := &windowsGeoRun{w: w, id: 12, gen: 7, locator: &comObject{vtbl: &opTable}, op: &comObject{vtbl: &opTable}}
+	run := &windowsGeoRun{w: w, id: 12, gen: 7, locator: &comObject{vtbl: &infoTable}, op: &comObject{vtbl: &infoTable}, asyncInfo: info}
 	windowsGeoRuns.Lock()
 	windowsGeoRuns.m[run] = struct{}{}
 	windowsGeoRuns.Unlock()

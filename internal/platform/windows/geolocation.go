@@ -12,13 +12,14 @@ import (
 )
 
 type windowsGeoRun struct {
-	w       *window
-	id      uint32
-	gen     uint32
-	locator *comObject
-	op      *comObject
-	handler *comHandler
-	token   eventToken
+	w         *window
+	id        uint32
+	gen       uint32
+	locator   *comObject
+	op        *comObject
+	asyncInfo *comObject
+	handler   *comHandler
+	token     eventToken
 }
 
 var windowsGeoRuns = struct {
@@ -38,7 +39,15 @@ func cancelWindowsLocation(w *window, id, generation uint32) {
 				run.locator.release()
 			}
 			if run.op != nil {
-				run.op.call(geoAsyncCancel)
+				if run.asyncInfo != nil {
+					run.asyncInfo.call(geoAsyncCancel)
+					run.asyncInfo.call(geoAsyncClose)
+					run.asyncInfo.release()
+				}
+				run.op.release()
+				if run.handler == nil {
+					run.locator.release()
+				}
 			} else if run.handler == nil {
 				run.locator.release()
 			}
@@ -53,6 +62,7 @@ var (
 	iidPositionHandler     = parseGUID("df3c6164-4e7b-5e8e-9a7e-13da059dec1e")
 	iidGeolocatorStatics   = parseGUID("9a8e7571-2df5-4591-9f87-eb5fd894e9b7")
 	iidAccessComplete      = parseGUID("f3524c93-e5c7-5b88-bedb-d3e637cff271")
+	iidAsyncInfo           = parseGUID("00000036-0000-0000-c000-000000000046")
 )
 
 const (
@@ -69,6 +79,7 @@ const (
 	geoAddPositionChanged    = 15
 	geoRemovePositionChanged = 16
 	geoAsyncCancel           = 9
+	geoAsyncClose            = 10
 	geoRequestAccess         = 6
 )
 
@@ -111,14 +122,13 @@ func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
 		return
 	}
 	run.op = operation
+	run.asyncInfo = operation.query(&iidAsyncInfo)
 	completed := newHandler(&iidGeolocationComplete, func(_ uintptr, status unsafe.Pointer) {
 		windowsGeoRuns.Lock()
 		_, active := windowsGeoRuns.m[run]
 		delete(windowsGeoRuns.m, run)
 		windowsGeoRuns.Unlock()
 		if !active {
-			operation.release()
-			locator.release()
 			return
 		}
 		var fix driver.LocationFix
@@ -152,6 +162,9 @@ func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
 				position.release()
 			}
 		}
+		if run.asyncInfo != nil {
+			run.asyncInfo.release()
+		}
 		operation.release()
 		locator.release()
 		w.post(func() {
@@ -173,6 +186,10 @@ func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
 		windowsGeoRuns.Lock()
 		delete(windowsGeoRuns.m, run)
 		windowsGeoRuns.Unlock()
+		if run.asyncInfo != nil {
+			run.asyncInfo.call(geoAsyncClose)
+			run.asyncInfo.release()
+		}
 		operation.release()
 		locator.release()
 		w.engine.Dispatch(driver.Event{Kind: driver.EventSensor, Count: id, Data: &driver.SensorReport{Generation: req.Generation, Error: "unavailable", End: true}})
