@@ -406,6 +406,8 @@ const (
 	// ItemPointerLock captures relative motion for ID, numbered Count.
 	// On requests a lock. A false On releases the matching request.
 	ItemPointerLock
+	// ItemMiniProgramSignIn asks for a platform login code, answered by EventMiniProgramSignIn. On permits a host-account prompt on Douyin. Sent only where MiniProgramSignIn is available.
+	ItemMiniProgramSignIn
 )
 
 // AppleSignInRequest is an ItemSignInWithApple's request, as core.AppleSignInOptions: the scopes it asks for and Nonce, which the core hashes as the request carries it, "" for none.

@@ -298,6 +298,8 @@ const (
 	EventPointerDelta
 	// EventPointerUnlocked says the lock numbered Count was released or refused.
 	EventPointerUnlocked
+	// EventMiniProgramSignIn answers ItemMiniProgramSignIn Count, Data a *MiniProgramCredential, or Text a stable failure code.
+	EventMiniProgramSignIn
 )
 
 // SharedItem is text or a file copied from an incoming share.
