@@ -44,6 +44,12 @@ type canvasOp struct {
 	Img  string    `json:"img,omitempty"`
 	// ImgData is the image's bytes, base64, when the drawing embeds them.
 	ImgData string `json:"imgd,omitempty"`
+	// V is a mesh's vertices, x, y, u, v each, in canvas and image points;
+	// VA its triangles' mean alpha, when a vertex color is not opaque white;
+	// and N whether it samples the nearest texel.
+	V  []float32 `json:"v,omitempty"`
+	VA []float32 `json:"va,omitempty"`
+	N  bool      `json:"n,omitempty"`
 }
 
 // gradient is a canvas gradient as the host builds one: radial or linear,
@@ -89,6 +95,13 @@ func canvasJSON(ops []driver.DrawOp) string {
 			if o.Dash != nil {
 				c.D = append([]float32(nil), (*o.Dash)...)
 			}
+		case driver.DrawVertices:
+			if draw, ok := o.ImageRect(); ok {
+				c = canvasOp{K: int(driver.DrawImage), X: draw.X, Y: draw.Y, W: draw.W, H: draw.H, X1: draw.X1, Y1: draw.Y1, X2: draw.X2, Y2: draw.Y2}
+			} else if o.Mesh != nil {
+				c = canvasOp{K: c.K, V: meshVertices(o.Mesh.Vertices), VA: meshAlphas(o.Mesh.Vertices), N: o.Sampling == driver.ImageSamplingNearest}
+			}
+			fallthrough
 		case driver.DrawImage:
 			if o.Image != nil {
 				c.Img = o.Image.URI
@@ -104,6 +117,40 @@ func canvasJSON(ops []driver.DrawOp) string {
 		return "[]"
 	}
 	return string(b)
+}
+
+// meshVertices flattens a mesh's positions and texture coordinates.
+func meshVertices(vertices []driver.CanvasVertex) []float32 {
+	out := make([]float32, 0, len(vertices)*4)
+	for _, v := range vertices {
+		out = append(out, float32(v.Position.X), float32(v.Position.Y), float32(v.TexCoord.X), float32(v.TexCoord.Y))
+	}
+	return out
+}
+
+// meshAlphas is each triangle's mean vertex alpha, or nil when every vertex is opaque, which the host plays as the triangle's alpha: an ArkUI canvas has no way to multiply an image by interpolated colors.
+func meshAlphas(vertices []driver.CanvasVertex) []float32 {
+	var out []float32
+	for i := 0; i+2 < len(vertices); i += 3 {
+		var sum float64
+		for _, v := range vertices[i : i+3] {
+			a := 1.0
+			if v.Color != 0 {
+				_, _, _, a = v.Color.Components()
+			}
+			sum += a
+		}
+		if out == nil && sum < 3 {
+			out = make([]float32, i/3, len(vertices)/3)
+			for j := range out {
+				out[j] = 1
+			}
+		}
+		if out != nil {
+			out = append(out, float32(sum/3))
+		}
+	}
+	return out
 }
 
 // gradientOf maps a drawing gradient, leaving out what the host cannot play.
