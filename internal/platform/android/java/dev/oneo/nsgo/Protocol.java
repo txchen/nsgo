@@ -481,11 +481,16 @@ final class Protocol {
     static final int ROLE_CELL = 24;
     static final int ROLE_LISTBOX = 25;
     static final int ROLE_OPTION = 26;
+    static final int ROLE_GROUP = 27;
+    static final int ROLE_REGION = 28;
+    static final int ROLE_NAVIGATION = 29;
     static final int ROLE_TREE = 30;
     static final int ROLE_TREE_ITEM = 31;
+    static final int ROLE_TOOLBAR = 32;
     static final int ROLE_MENU_ITEM_CHECKBOX = 33;
     static final int ROLE_MENU_ITEM_RADIO = 34;
     static final int ROLE_SPIN_BUTTON = 35;
+    static final int ROLE_COMBOBOX = 36;
     static final int ROLE_STATUS = 38;
     static final int ROLE_SEARCH_FIELD = 39;
 
@@ -517,6 +522,17 @@ final class Protocol {
     static final int SPOKEN_EXPANDED = 14;
     static final int SPOKEN_COLLAPSED = 15;
     static final int SPOKEN_SEPARATOR = 16;
+    static final int SPOKEN_LIST_BOX = 17;
+    static final int SPOKEN_OPTION = 18;
+    static final int SPOKEN_COMBO_BOX = 19;
+    static final int SPOKEN_GROUP = 20;
+    static final int SPOKEN_REGION = 21;
+    static final int SPOKEN_NAVIGATION = 22;
+    static final int SPOKEN_TREE = 23;
+    static final int SPOKEN_TREE_ITEM = 24;
+    static final int SPOKEN_TOOLBAR = 25;
+    static final int SPOKEN_PRESSED = 26;
+    static final int SPOKEN_BUSY = 27;
 
     // Keyboard types, as in core/mount.go.
     static final int KEYBOARD_EMAIL = 1;

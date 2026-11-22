@@ -316,11 +316,15 @@ func TestDirectionSaysTheWordsInTheAppsLanguage(t *testing.T) {
 		searchBox string
 		partly    string
 		separator string
+		listBox   string
+		comboBox  string
+		pressed   string
+		busy      string
 	}{
-		{"en", false, "search box", "partially checked", ", "},
-		{"zh-Hans", false, "搜索框", "部分选中", "，"},
-		{"zh-CN", false, "搜索框", "部分选中", "，"},
-		{"de", true, "search box", "partially checked", ", "},
+		{"en", false, "search box", "partially checked", ", ", "list box", "combo box", "pressed", "busy"},
+		{"zh-Hans", false, "搜索框", "部分选中", "，", "列表框", "组合框", "已按下", "忙碌"},
+		{"zh-CN", false, "搜索框", "部分选中", "，", "列表框", "组合框", "已按下", "忙碌"},
+		{"de", true, "search box", "partially checked", ", ", "list box", "combo box", "pressed", "busy"},
 	} {
 		var w writer
 		writeDirection(&w, &driver.MountItem{Kind: driver.ItemDirection, RTL: c.rtl, Language: c.lang})
@@ -335,14 +339,89 @@ func TestDirectionSaysTheWordsInTheAppsLanguage(t *testing.T) {
 		if len(r.buf) != 0 || len(words) != len(english) {
 			t.Fatalf("%s: %d words, %d bytes left", c.lang, len(words), len(r.buf))
 		}
-		if words[2] != c.searchBox || words[13] != c.partly || words[len(words)-1] != c.separator {
-			t.Errorf("%s: a search box is %q, partially checked %q and separator %q", c.lang, words[2], words[13], words[len(words)-1])
+		if words[2] != c.searchBox || words[13] != c.partly || words[16] != c.separator ||
+			words[17] != c.listBox || words[19] != c.comboBox || words[26] != c.pressed || words[27] != c.busy {
+			t.Errorf("%s: got searchBox=%q partly=%q sep=%q listBox=%q comboBox=%q pressed=%q busy=%q",
+				c.lang, words[2], words[13], words[16], words[17], words[19], words[26], words[27])
 		}
 		for i, s := range words {
 			if s == "" || c.searchBox != english[2] && s == english[i] {
 				t.Errorf("%s: word %d is %q", c.lang, i, s)
 			}
 		}
+	}
+}
+
+// TestWriteViewPropsEncodesRolesPressedBusy checks that writeViewProps encodes
+// all NSH 0.4.0 roles and the Pressed and Busy state bits in the exact layout
+// NsgoView.props reads.
+func TestWriteViewPropsEncodesRolesPressedBusy(t *testing.T) {
+	roles := []driver.Role{
+		driver.RoleListbox, driver.RoleOption, driver.RoleCombobox, driver.RoleGroup,
+		driver.RoleRegion, driver.RoleNavigation, driver.RoleTree, driver.RoleTreeItem,
+		driver.RoleToolbar, driver.RoleMenuItemCheckbox, driver.RoleMenuItemRadio,
+	}
+	for _, role := range roles {
+		var w writer
+		writeViewProps(&w, &driver.ViewProps{
+			Role:          role,
+			Disabled:      true,
+			Selected:      true,
+			Checked:       true,
+			Indeterminate: false,
+			Pressed:       true,
+			Busy:          true,
+			Label:         "item",
+		})
+		r := reader{w.buf}
+		gotRole := driver.Role(r.byte())
+		flags := r.byte()
+		label := r.str()
+		if gotRole != role {
+			t.Errorf("role %v: encoded %v", role, gotRole)
+		}
+		wantFlags := byte(1 | 2 | 4 | 16 | 32)
+		if flags != wantFlags {
+			t.Errorf("role %v: flags = %08b, want %08b", role, flags, wantFlags)
+		}
+		if label != "item" {
+			t.Errorf("role %v: label = %q, want %q", role, label, "item")
+		}
+	}
+}
+
+// TestWriteStyleAndDrawingPreserveFontFamilyList checks that both text styles
+// and canvas text ops send the full CSS fontFamily list so Java can build a
+// Typeface.CustomFallbackBuilder chain instead of truncating to the first family.
+func TestWriteStyleAndDrawingPreserveFontFamilyList(t *testing.T) {
+	list := `Inter, "Noto Sans SC", 'Brand, Inc', monospace, sans-serif`
+	var sw writer
+	writeStyle(&sw, &driver.TextStyle{
+		Font: driver.Font{Family: list, Size: 16, Weight: 500},
+	})
+	sr := reader{sw.buf}
+	if got := sr.str(); got != list {
+		t.Errorf("writeStyle family = %q, want %q", got, list)
+	}
+
+	var dw writer
+	writeDrawing(&dw, &driver.Drawing{
+		Ops: []driver.DrawOp{{
+			Kind: driver.DrawFillText,
+			Text: "hello",
+			Font: driver.Font{Family: list, Size: 14, Weight: 400},
+		}},
+	})
+	dr := reader{dw.buf}
+	_ = dr.u32() // op bytes length
+	if kind := dr.byte(); kind != byte(driver.DrawFillText) {
+		t.Fatalf("op kind = %v, want %v", kind, driver.DrawFillText)
+	}
+	_ = dr.str() // text
+	_ = dr.float()
+	_ = dr.float()
+	if got := dr.str(); got != list {
+		t.Errorf("writeDrawing family = %q, want %q", got, list)
 	}
 }
 

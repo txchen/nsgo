@@ -1934,22 +1934,6 @@ func writeDecor(w *writer, v *driver.ViewStyle) {
 	writeKeyframes(w, v.Animation)
 }
 
-// writeStyle writes a text style in the format Text.Style reads.
-func writeStyle(w *writer, t *driver.TextStyle) {
-	w.str(firstFamily(t.Font.Family))
-	w.str(t.Font.Language)
-	w.points(t.Font.Size)
-	w.u16(uint16(t.Font.Weight))
-	w.u32(uint32(t.Color))
-	w.points(t.LineHeight)
-	w.points(t.LetterSpacing)
-	w.byte(byte(t.Align))
-	w.flags(t.Font.Italic,
-		t.Decoration&driver.TextDecorationUnderline != 0,
-		t.Decoration&driver.TextDecorationLineThrough != 0, t.RTL)
-	w.byte(byte(t.Font.Variant))
-}
-
 // writeBackgroundInset writes either points or a fraction of the box's height.
 func writeBackgroundInset(w *writer, inset driver.Length) {
 	if percent, ok := inset.Percent(); ok {
@@ -2020,66 +2004,4 @@ func writeViewStyle(w *writer, v *driver.ViewStyle) {
 	w.byte(byte(tn.Properties))
 	w.flags(v.Clip, v.Hidden, v.ContinuousCorners, v.BackfaceHidden)
 	writeDecor(w, v)
-}
-
-// writeViewProps writes a view's props as NsgoView.props reads it.
-func writeViewProps(w *writer, p *driver.ViewProps) {
-	role := p.Role
-	if role == driver.RoleAlertDialog {
-		// The runtime knows a dialog, which names its pane alike.
-		role = driver.RoleDialog
-	}
-	w.byte(byte(role))
-	w.flags(p.Disabled, p.Selected, p.Checked, p.Indeterminate)
-	w.str(p.Label)
-	w.str(p.TestID)
-	// Java decides when a drag activates the pan.
-	a := p.PanActivation
-	w.points(a.ActiveOffsetX)
-	w.points(a.ActiveOffsetY)
-	w.points(a.FailOffsetX)
-	w.points(a.FailOffsetY)
-	// Accessibility beyond the role, label and states.
-	w.str(p.HelpText())
-	w.flags(p.Expandable, p.Expanded, p.ElementsHidden, p.Value.IsRange())
-	w.byte(byte(p.Accessible))
-	w.byte(byte(p.LiveRegion))
-	w.float(p.Value.Min)
-	w.float(p.Value.Max)
-	w.float(p.Value.Now)
-	w.str(p.Value.Text)
-	actions := p.ActionList()
-	w.u32(uint32(len(actions)))
-	for _, act := range actions {
-		w.str(act.Name)
-		w.str(act.Label)
-	}
-	// The runtime routes touches by them and times long presses.
-	w.byte(byte(p.PointerEvents))
-	w.points(p.HitSlop.Top)
-	w.points(p.HitSlop.Right)
-	w.points(p.HitSlop.Bottom)
-	w.points(p.HitSlop.Left)
-	w.u32(uint32(max(p.DelayLongPress.Milliseconds(), 0)))
-	if r := p.Ripple; r != nil {
-		w.flags(true, r.Borderless, r.Foreground)
-		w.u32(uint32(r.Color))
-		w.points(r.Radius)
-	} else {
-		w.byte(0)
-	}
-	// Selections run on the UI thread (Selection.java).
-	w.flags(p.SelectionArea)
-	w.byte(byte(p.Selectable))
-	w.u32(uint32(p.SelectionColor))
-	w.flags(p.Invalid, p.LabelPress)
-	w.u32(uint32(p.LabelFor))
-	var labels []driver.NodeID
-	if p.LabelledBy != nil {
-		labels = *p.LabelledBy
-	}
-	w.u32(uint32(len(labels)))
-	for _, id := range labels {
-		w.u32(uint32(id))
-	}
 }
