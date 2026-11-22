@@ -27,6 +27,8 @@ var windowsGeoRuns = struct {
 	m map[*windowsGeoRun]struct{}
 }{m: map[*windowsGeoRun]struct{}{}}
 
+var activateGeolocator = func() *comObject { return activate(geolocatorClass, &iidGeolocator) }
+
 func cancelWindowsLocation(w *window, id, generation uint32) {
 	windowsGeoRuns.Lock()
 	defer windowsGeoRuns.Unlock()
@@ -103,7 +105,7 @@ func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
 		w.watchWindowsLocation(id, req)
 		return
 	}
-	locator := activate(geolocatorClass, &iidGeolocator)
+	locator := activateGeolocator()
 	if locator == nil {
 		w.engine.Dispatch(driver.Event{Kind: driver.EventSensor, Count: id, Data: &driver.SensorReport{Generation: req.Generation, Error: "unavailable", End: true}})
 		return
