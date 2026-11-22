@@ -5,7 +5,7 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -14,6 +14,7 @@ import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.PixelCopy;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -254,7 +255,7 @@ final class TestAgent {
                 return;
             }
             case "screenshot":
-                view.testReply(id, "", screenshot());
+                screenshot(id);
                 return;
             case "signature":
                 view.testReply(id, "", signature());
@@ -450,15 +451,32 @@ final class TestAgent {
         throw new IllegalArgumentException("the alert has no action " + index);
     }
 
-    /** The window drawn into a bitmap, as a PNG in base64. */
-    private String screenshot() {
+    /** The rendered window copied to a bitmap and replied as a PNG in base64. */
+    private void screenshot(int id) {
         View root = activity().getWindow().getDecorView();
         Bitmap bitmap = Bitmap.createBitmap(Math.max(root.getWidth(), 1), Math.max(root.getHeight(), 1), Bitmap.Config.ARGB_8888);
-        root.draw(new Canvas(bitmap));
-        ByteArrayOutputStream png = new ByteArrayOutputStream();
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, png);
-        bitmap.recycle();
-        return Base64.encodeToString(png.toByteArray(), Base64.NO_WRAP);
+        int[] at = new int[2];
+        root.getLocationInWindow(at);
+        // A software View.draw ignores render-node clips, filters and texture
+        // layers. Copy the rendered window so tests see the pixels users see.
+        try {
+            PixelCopy.request(activity().getWindow(), new Rect(at[0], at[1], at[0] + bitmap.getWidth(), at[1] + bitmap.getHeight()), bitmap, result -> {
+                try {
+                    if (result != PixelCopy.SUCCESS) {
+                        view.testReply(id, "PixelCopy failed: " + result, "");
+                        return;
+                    }
+                    ByteArrayOutputStream png = new ByteArrayOutputStream();
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, png);
+                    view.testReply(id, "", Base64.encodeToString(png.toByteArray(), Base64.NO_WRAP));
+                } finally {
+                    bitmap.recycle();
+                }
+            }, ui);
+        } catch (IllegalArgumentException e) {
+            bitmap.recycle();
+            view.testReply(id, "PixelCopy failed: " + e.getMessage(), "");
+        }
     }
 
     /**
