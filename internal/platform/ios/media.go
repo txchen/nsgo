@@ -235,41 +235,28 @@ func (v *view) animatesStyle() bool {
 	return m != nil && m.Appear != nil
 }
 
-type layoutBatch struct {
-	anim    *driver.LayoutAnimation
-	created map[driver.NodeID]bool
-	deleted map[objc.ID]bool
+// layoutHost binds native placement and the backend's clock to shared transitions.
+func (s *surface) layoutHost() apple.LayoutHost[*view] {
+	return apple.LayoutHost[*view]{
+		Motions: s.motions, Ghosts: &s.ghosts,
+		ID:     func(v *view) driver.NodeID { return v.id },
+		Native: func(v *view) objc.ID { return v.native },
+		Framed: func(v *view) bool { return v.framed },
+		Frame:  func(v *view) driver.Bounds { return v.frame },
+		Shift:  func(v *view) driver.Point { return v.shift },
+		Place:  (*view).place, Restyle: (*view).restyle,
+		Now: s.clock, Tick: s.startTicking,
+		Start:   s.layoutStart,
+		Disable: func(v *view) { v.native.Send(sel("setUserInteractionEnabled:"), false) },
+	}
 }
+
+type layoutBatch = apple.LayoutBatch
 
 // setFrame moves v to the item's frame, animating from where it shows now when
 // the batch animates layout or the item carries a transition.
 func (s *surface) setFrame(v *view, it *driver.MountItem, lb *layoutBatch) {
-	f := it.Frame
-	m := s.motions[v]
-	target := v.frame
-	if m != nil && m.Frame != nil {
-		target = m.To
-	}
-	if f == target && v.framed {
-		return
-	}
-	tr := it.Transition
-	if lb != nil && lb.anim.Update != nil && !lb.created[v.id] {
-		tr = lb.anim.Update
-	}
-	if tr != nil && v.framed {
-		if m == nil {
-			m = &apple.LayoutMotion{}
-			s.motions[v] = m
-		}
-		m.From, m.To, m.Frame, m.Start = v.frame, f, tr, s.layoutStart(tr)
-		s.startTicking()
-		return
-	}
-	if m != nil {
-		m.Frame = nil
-	}
-	v.place(f)
+	s.layoutHost().SetFrame(v, it, lb)
 }
 
 // place sets v's frame and what follows it. Bounds and center, unlike
@@ -333,67 +320,15 @@ func (v *view) place(f driver.Bounds) {
 }
 
 func (s *surface) appear(v *view, lb *layoutBatch, parent driver.NodeID) {
-	if lb == nil || lb.anim.Create == nil || !lb.created[v.id] || lb.created[parent] {
-		return
-	}
-	m := s.motions[v]
-	if m == nil {
-		m = &apple.LayoutMotion{}
-		s.motions[v] = m
-	}
-	m.Appear, m.Start = lb.anim.Create, s.clock()
-	s.startTicking()
+	s.layoutHost().Appear(v, lb, parent)
 }
 
-// match moves v, which the batch created, from where old, which it
-// deletes, shows in v's parent, on the batch's Update rather than
-// appearing, and hides old at once (driver.ItemMatch).
 func (s *surface) match(v, old *view, lb *layoutBatch) {
-	if lb == nil || lb.anim.Update == nil || old == nil || !old.framed || !v.framed {
-		return
-	}
-	up := v.native.Send(selSuperview)
-	if up == 0 || old.native.Send(selSuperview) == 0 {
-		return
-	}
-	r := objc.Send[apple.CGRect](up, sel("convertRect:fromView:"), objc.Send[apple.CGRect](old.native, selBounds), old.native)
-	from := driver.Bounds{
-		Origin: driver.Point{X: driver.Points(r.Origin.X) - v.shift.X, Y: driver.Points(r.Origin.Y) - v.shift.Y},
-		Size:   driver.Size{Width: driver.Points(r.Size.Width), Height: driver.Points(r.Size.Height)},
-	}
-	old.native.Send(selSetHidden, true)
-	m := s.motions[v]
-	if m == nil {
-		m = &apple.LayoutMotion{}
-		s.motions[v] = m
-	}
-	to := v.frame
-	m.Appear = nil
-	m.From, m.To, m.Frame, m.Start = from, to, lb.anim.Update, s.layoutStart(lb.anim.Update)
-	v.place(from)
-	v.restyle()
-	s.startTicking()
+	s.layoutHost().Match(v, old, lb)
 }
 
 func (s *surface) vanish(v *view, lb *layoutBatch) bool {
-	if lb == nil || lb.anim.Delete == nil || !v.framed {
-		return false
-	}
-	up := v.native.Send(selSuperview)
-	if up == 0 {
-		return false
-	}
-	for n := up; n != 0; n = n.Send(selSuperview) {
-		if lb.deleted[n] {
-			return false
-		}
-	}
-	lb.deleted[v.native] = true
-	v.native.Send(sel("retain"))
-	v.native.Send(sel("setUserInteractionEnabled:"), false)
-	s.ghosts = append(s.ghosts, apple.NewLayoutGhost(v.native, lb.anim.Delete, s.clock()))
-	s.startTicking()
-	return true
+	return s.layoutHost().Vanish(v, lb)
 }
 
 func (s *surface) inGhost(native objc.ID) bool {

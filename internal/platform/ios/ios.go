@@ -1137,7 +1137,7 @@ func (s *surface) apply(b *driver.MountBatch) {
 	s.batch++
 	var lb *layoutBatch
 	if b.LayoutAnimation != nil && !s.env.ReduceMotion {
-		lb = &layoutBatch{anim: b.LayoutAnimation, created: map[driver.NodeID]bool{}, deleted: map[objc.ID]bool{}}
+		lb = &layoutBatch{Animation: b.LayoutAnimation, Created: map[driver.NodeID]bool{}, Deleted: map[objc.ID]bool{}}
 	}
 	s.coverScreens(b.Items)
 	for i := range b.Items {
@@ -1149,7 +1149,7 @@ func (s *surface) apply(b *driver.MountBatch) {
 			}
 			s.views[it.ID] = s.create(it.View, it.ID)
 			if lb != nil {
-				lb.created[it.ID] = true
+				lb.Created[it.ID] = true
 			}
 			continue
 		case driver.ItemPictureInPictureCommand:
