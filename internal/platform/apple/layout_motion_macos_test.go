@@ -6,16 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 
 	"github.com/nsgo-dev/nsgo/internal/driver"
 )
 
 func TestLayoutGhostFadesAndLeavesItsSuperview(t *testing.T) {
-	if _, err := purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_NOW|purego.RTLD_GLOBAL); err != nil {
-		t.Fatal(err)
-	}
 	onMain(func() {
 		makeView := func() objc.ID { return objc.ID(Class("NSView")).Send(Sel("new")) }
 		parent, deleted, descendant := makeView(), makeView(), makeView()
