@@ -546,6 +546,9 @@ const capHapticPatterns = 16
 // capFetchToFile is the third capability byte's bit for a runtime that streams a msgFetch with fetchToFile to a file (Protocol.CAP_FETCH_TO_FILE): one built before it reads the destination as the header count, so Go asks it for the whole body instead.
 const capFetchToFile = 64
 
+// capExtendedSensors prevents new kinds/accuracy prompts from reaching a legacy sensor decoder.
+const capExtendedSensors = 128
+
 // readEnvironmentCapabilities reads the environment as readEnvironment does, with the third capability byte, which says what the runtime itself can do (cap* bits) rather than the device, so it stays out of driver.Environment.
 func readEnvironmentCapabilities(r *reader) (driver.Environment, byte) {
 	env := driver.Environment{

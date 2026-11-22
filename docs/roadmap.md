@@ -72,7 +72,7 @@ NSGo's own, for [#56](https://github.com/nsgo-dev/nsgo/issues/56) ([location and
 | Location elsewhere | Geolocation API, `Windows.Devices.Geolocation`, GeoClue, [#1404](https://github.com/nsgo-dev/nsgo/issues/1404) | The web, Windows and Linux give location fixes |
 | Motion in mobile browsers | `DeviceMotionEvent`, [#1208](https://github.com/nsgo-dev/nsgo/issues/1208) | Safari on an iPhone and Chrome on Android report natural-axis motion, with permission and lifecycle verified on devices |
 | The sensors' settings | `UIApplicationOpenSettingsURLString`, `Privacy_LocationServices`, [#1405](https://github.com/nsgo-dev/nsgo/issues/1405) | `OpenPermissionSettings` opens location's and motion's settings on macOS too, where iOS and Android open the app's page now |
-| More sensor services | `CLMonitor`, `CMPedometer`, `TYPE_STEP_COUNTER`, `CMAltimeter`, [#1406](https://github.com/nsgo-dev/nsgo/issues/1406) | Geofencing, steps, activity recognition, the barometer, a temporary precise-location request and bounded background motion get scoped APIs of their own |
+| More sensor services | `CLCircularRegion`, `CMPedometer`, `TYPE_STEP_COUNTER`, `CMAltimeter`, [#1406](https://github.com/nsgo-dev/nsgo/issues/1406) | Scoped APIs and Apple/Android providers exist for regions, steps, pressure, precise authorization and finite background motion; Apple supplies activity classification, Android reports it unavailable without a classifier adapter; physical authorization, fitness accuracy, region wake-up and suspended execution acceptance remain open (#1406) |
 
 ## Bluetooth
 

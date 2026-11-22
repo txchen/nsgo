@@ -133,6 +133,8 @@ final class Protocol {
     static final int DISCOVERY_STOP = 3;
     /** The environment's third capability byte's bit for a runtime that runs Discovery (capDiscoverServices in protocol.go). */
     static final int CAP_DISCOVER_SERVICES = 32;
+    /** Scoped extended sensor kinds/commands, including separate fitness permission; absent in older runtime binaries. */
+    static final int CAP_EXTENDED_SENSORS = 128;
     /** A full native tree follows: surface ID and its attachment generation (ViewAttachment). */
     static final int EXT_SURFACE_RESET = 11;
     /** The environment's third capability byte's bit for a device that plays timed vibration patterns (capHapticPatterns in protocol.go). */

@@ -54,6 +54,10 @@ func (s *surface) sensor(it *driver.MountItem) {
 		}
 		return
 	}
+	if req.Command > driver.SensorStop {
+		s.engine.Dispatch(driver.NoSensor(it))
+		return
+	}
 	g := js.Global()
 	available, reverse := motionBrowser(g)
 	if req.Kind != driver.SensorMotion || !available {

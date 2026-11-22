@@ -2721,6 +2721,7 @@ const (
 	textPermissionMediaLibrary
 	textPermissionLocation
 	textPermissionBackgroundLocation
+	textPermissionActivityRecognition
 	textPermissionMotion
 	textPermissionNotifications
 	textDemoCamera
@@ -5039,6 +5040,7 @@ var keyOfText = [numTexts]string{
 	"permissionMediaLibrary",
 	"permissionLocation",
 	"permissionBackgroundLocation",
+	"permissionActivityRecognition",
 	"permissionMotion",
 	"permissionNotifications",
 	"demoCamera",
@@ -7355,6 +7357,7 @@ var textsEn = i18n.NewTexts(""+
 	"Media & Apple Music"+
 	"Location"+
 	"Background location"+
+	"Motion & Fitness"+
 	"Motion"+
 	"Notifications"+
 	"Camera"+
@@ -9668,6 +9671,7 @@ var textsEn = i18n.NewTexts(""+
 		19,
 		8,
 		19,
+		16,
 		6,
 		13,
 		6,
@@ -11984,6 +11988,7 @@ var textsZhHans = i18n.NewTexts(""+
 	"媒体与Apple Music"+
 	"定位"+
 	"后台定位"+
+	"运动与健身"+
 	"运动"+
 	"通知"+
 	"画布"+
@@ -14297,6 +14302,7 @@ var textsZhHans = i18n.NewTexts(""+
 		20,
 		6,
 		12,
+		15,
 		6,
 		6,
 		6,
@@ -36663,6 +36669,17 @@ func PermissionBackgroundLocation(cx *core.Scope) string {
 // PermissionBackgroundLocation is the package's PermissionBackgroundLocation in the language of msgs.
 func (msgs Messages) PermissionBackgroundLocation() string {
 	return msgs.text(textPermissionBackgroundLocation)
+}
+
+// PermissionActivityRecognition says "Motion & Fitness"
+// in the language the app shows under cx.
+func PermissionActivityRecognition(cx *core.Scope) string {
+	return For(cx).PermissionActivityRecognition()
+}
+
+// PermissionActivityRecognition is the package's PermissionActivityRecognition in the language of msgs.
+func (msgs Messages) PermissionActivityRecognition() string {
+	return msgs.text(textPermissionActivityRecognition)
 }
 
 // PermissionMotion says "Motion"
