@@ -392,7 +392,6 @@ What the desktop installers ([tool](architecture/tool.md#installers)) and the st
 
 | Item | Reference | Done when |
 | --- | --- | --- |
-
 | Notarization checked | [#1407](https://github.com/nsgo-dev/nsgo/issues/1407) | A Developer ID build is accepted by the notary service and opens from a download without Gatekeeper's warning; so far the hardened runtime's signature was checked with a development identity, and the submission as far as notarytool's credentials (2026-11-10) |
 | Windows installers with Go and Xcode | [#1408](https://github.com/nsgo-dev/nsgo/issues/1408) | `build` makes the Windows installer without makensis, which a Mac needs from Homebrew |
 | Signed Windows installers | `signtool`, NSIS's `!uninstfinalize`, [#1409](https://github.com/nsgo-dev/nsgo/issues/1409) | A certificate in `sign` signs the executable and the installer, as `sign.certificate` and `sign.sign_command` now do in Go (`winsign.go`, `authenticode/`), and the result verifies with `osslsigncode` (2026-11-16); Windows checks that the signature satisfies SmartScreen on a download, and a timestamped signature lasts past the certificate's expiration |
@@ -404,7 +403,7 @@ What the desktop installers ([tool](architecture/tool.md#installers)) and the st
 | MSIX names and logos | `resources.pri`, [#1415](https://github.com/nsgo-dev/nsgo/issues/1415) | The MSIX names the app in each of its languages and carries its logos at every scale, which need a resource index |
 | Flatpak bundles | OSTree, `flatpak build-bundle`, [#1416](https://github.com/nsgo-dev/nsgo/issues/1416) | `build` writes a `.flatpak` users install directly, and the manifest is built with flatpak-builder on GNOME's runtime |
 | Linux arm64 Steam runtime | [Steam verification (#1228)](https://github.com/nsgo-dev/nsgo/issues/1228) | An arm64 depot includes its own GTK 4 libraries and opens in a Steam runtime for arm64 |
-| AppImage updates | `.upd_info`, zsync, [#1417](https://github.com/nsgo-dev/nsgo/issues/1417) | The AppImage carries its update information, so AppImageUpdate and launchers update it |
+| AppImage updates on arm64 | `.upd_info`, zsync, [#1417](https://github.com/nsgo-dev/nsgo/issues/1417) | Native arm64 update execution remains to check; x64 and arm64 images now embed update locators and ship zsync controls, and the official updater reconstructed an x64 image from an earlier version using HTTP ranges with 98.43% seed reuse (2026-11-23) |
 
 Third-party Go packages can declare desktop native libraries through `nsgo-natives.yaml` ([#1722](https://github.com/nsgo-dev/nsgo/issues/1722), [native libraries](public/en/native-libraries.md)). iOS/tvOS frameworks, Android ABI libraries, watchOS and HarmonyOS native dependencies need packaging contracts of their own; web and mini-program builds do not consume these shared libraries.
 
