@@ -4,7 +4,7 @@ package windows
 
 import "unsafe"
 
-// A transparent window is a popup without a frame, as NSH's is: a system frame around see-through content would draw a box nothing is in, and its system menu stays for the taskbar's menu. It draws through DirectComposition with alpha, as a window with a material does (material.go), clearing to nothing where the app draws nothing, and DWM draws it bare: no shadow and square corners. Only a window opened transparent has the composition, which WS_EX_NOREDIRECTIONBITMAP holds from the window's creation, so only such a window changes between transparent and framed later, clearing to white while framed, and only its environment reports CanMakeWindowsTransparent. A framed window keeps the shadow its frame casts. A transparent panel (SurfaceConfig.Transparent) opens the same way, a popup whose content draws its own corners and shadow, and stays so; without DirectComposition it stays opaque, as its environment's WindowTransparent says.
+// A transparent window is a popup without a frame, as NSH's is: a system frame around see-through content would draw a box nothing is in, and its system menu stays for the taskbar's menu. It draws through DirectComposition with alpha, as a window with a material does (material.go), clearing to nothing where the app draws nothing, and DWM draws it bare: no shadow and square corners. Only a window opened transparent has the composition, which WS_EX_NOREDIRECTIONBITMAP holds from the window's creation, so only such a window changes between transparent and framed later, clearing to white while framed, and only its environment reports CanMakeWindowsTransparent. NoShadow also disables DWM's non-client rendering on a framed window, keeping its frame style and default corner preference. A transparent panel (SurfaceConfig.Transparent) opens the same way, a popup whose content draws its own corners and shadow, and stays so; without DirectComposition it stays opaque, as its environment's WindowTransparent says.
 //
 // A window off the taskbar is a tool window, which neither the taskbar nor Alt+Tab lists; a framed one then shows a tool window's smaller caption. The taskbar adds or deletes the button of a window that shows as the style changes (ITaskbarList).
 
@@ -44,15 +44,26 @@ func (w *window) frameStyle(current uintptr) uintptr {
 	return style
 }
 
-// applyBare has DWM draw a transparent window without a shadow or rounded corners, or a framed one as its style says.
+// applyBare disables DWM's non-client rendering for transparent or shadowless
+// windows, and also removes a transparent window's rounded corners.
 func (w *window) applyBare() {
 	policy, corners := int32(dwmNCRPUseWindowStyle), int32(dwmCornerDefault)
+	if w.transparent || w.opts.NoShadow {
+		policy = dwmNCRPDisabled
+	}
 	if w.transparent {
-		policy, corners = dwmNCRPDisabled, dwmCornerDoNotRound
+		corners = dwmCornerDoNotRound
 	}
 	// Each fails quietly where the system lacks it.
 	dwmSetWindowAttribute.Call(w.hwnd, dwmwaNCRenderingPolicy, uintptr(unsafe.Pointer(&policy)), 4)
 	dwmSetWindowAttribute.Call(w.hwnd, dwmwaWindowCornerPreference, uintptr(unsafe.Pointer(&corners)), 4)
+}
+
+// setShadow keeps the non-client shadow, or asks DWM to stop rendering it.
+func (w *window) setShadow(on bool) {
+	w.opts.NoShadow = !on
+	w.applyBare()
+	w.frameChanged()
 }
 
 // setTransparent changes a window opened transparent between transparent and framed, keeping its content's size and place; others stay as they are.

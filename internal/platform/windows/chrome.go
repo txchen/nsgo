@@ -343,6 +343,10 @@ func (w *window) windowCommand(c *driver.WindowCommand) {
 		if w.kind == driver.SurfaceWindow && !(w.primary && w.opts.Hidden) {
 			w.setSkipTaskbar(c.On)
 		}
+	case driver.WindowSetShadow:
+		if !w.embedded && w.kind == driver.SurfaceWindow && !(w.primary && w.opts.Hidden) {
+			w.setShadow(c.On)
+		}
 	case driver.WindowFitSize:
 		if w.kind == driver.SurfacePanel {
 			w.fitPanel(c.Frame.Width, c.Frame.Height)

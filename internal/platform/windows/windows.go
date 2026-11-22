@@ -78,7 +78,7 @@ type Options struct {
 	Material driver.WindowMaterial
 	// Constraints limit the window (nsgo.WindowConstraints).
 	Constraints driver.WindowConstraints
-	// Transparent opens the window without a background or frame, NoShadow without DWM's shadow, which only a transparent window lacks, and SkipTaskbar off the taskbar (look.go).
+	// Transparent opens the window without a background or frame, NoShadow without DWM's non-client rendering and shadow, and SkipTaskbar off the taskbar (look.go).
 	Transparent, NoShadow, SkipTaskbar bool
 	// Fonts are font files under the app's resources, registered before
 	// the first view.
@@ -693,7 +693,7 @@ func Run(app engine.App, opts Options) {
 		cwUseDefault, cwUseDefault, uintptr(frame.Right-frame.Left), uintptr(frame.Bottom-frame.Top),
 		0, 0, instance, 0)
 	w.hwnd = hwnd
-	if w.transparent {
+	if w.transparent || opts.NoShadow {
 		w.applyBare()
 	}
 	// Placed before it is the window's, so the sizes this sends do not
@@ -1012,7 +1012,7 @@ func (w *window) openSurface(cfg driver.SurfaceConfig) {
 		return
 	}
 	child.hwnd = hwnd
-	if child.transparent {
+	if child.transparent || opts.NoShadow {
 		child.applyBare()
 	}
 	if cfg.Kind == driver.SurfaceWindow {

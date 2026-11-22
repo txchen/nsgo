@@ -290,6 +290,8 @@ warning := core.Text{ContentFunc: func() string {
 
 将 `desktop.WindowOptions.Parent` 设为同一应用中打开的窗口，父窗口关闭时子窗口也会关闭。在 macOS 上，子窗口始终位于父窗口上方，未设置 `Frame` 时在父窗口上居中打开，并随父窗口隐藏、最小化或进入全屏。
 
+`WindowOptions.NoShadow` 和 `desktop.SetWindowShadow(cx, false)` 也会移除 Windows 和 Linux 上有边框窗口的阴影。在通常由桌面绘制边框的 Linux 环境中，窗口会采用 GTK 的客户端标题栏，恢复阴影后仍保留该标题栏；运行中切换会保留编辑器的文字、焦点和选区。
+
 `desktop.SetWindowPointerEvents` 让指针穿过窗口，落到它下面任何应用的窗口上：`WindowPointerNone` 处处穿过，像抬头显示那样；`WindowPointerPainted` 只在没有视图绘制内容、也没有视图接收指针的地方穿过，像桌面宠物周围那样，宠物本身仍接收按下、拖动和右键；系统绘制的标题栏算作什么都没绘制。`WindowOptions.PointerEvents` 和 `PanelOptions.PointerEvents` 让窗口一打开就这样。完全不接收指针的窗口收不到任何按下，所以应用要从快捷键、托盘图标或另一个窗口把指针交还给它。受 `Access` 约束的代码需要 `core.AccessOverlay`。
 
 ```go

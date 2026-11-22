@@ -10,7 +10,7 @@ import (
 	"github.com/nsgo-dev/nsgo/internal/driver"
 )
 
-// GTK 4 draws a window with an alpha channel wherever the display composites, an RGBA visual on X11 and any surface on Wayland, so a transparent window is an undecorated one whose theme background is gone: it loses the style class that paints it, and a style of NSGo's own clears it and the shadow GTK draws. NoShadow clears the shadow GTK draws around its own decorations; a window manager's, as on X11 with server-side ones, stays. Without a compositor, as on X11 without a compositing manager, there is no alpha to show through and the window shows black where the app draws nothing, which the environment says (CanMakeWindowsTransparent). A transparent panel (SurfaceConfig.Transparent), whose content draws its own corners and shadow, is cleared the same way only where the display composites, keeping its background elsewhere; the environment's WindowTransparent says whether a window or panel shows through now. GTK 4 keeps a window off the task list only on X11, through its GdkX11Surface's hint, and Wayland has no such hint, which the environment says too (CanSkipTaskbar).
+// GTK 4 draws a window with an alpha channel wherever the display composites, an RGBA visual on X11 and any surface on Wayland, so a transparent window is an undecorated one whose theme background is gone: it loses the style class that paints it, and a style of NSGo's own clears it and the shadow GTK draws. Its surface also omits the opaque fill behind the root (widget.go). NoShadow uses client decorations, installing GTK's title bar where the window manager normally decorates windows so its CSS controls the shadow; that title bar stays when the shadow returns. Without a compositor the surface keeps its opaque background, which the environment says (CanMakeWindowsTransparent). A transparent panel (SurfaceConfig.Transparent), whose content draws its own corners and shadow, is cleared the same way only where the display composites, keeping its background elsewhere; the environment's WindowTransparent says whether a window or panel shows through now. GTK 4 keeps a window off the task list only on X11, through its GdkX11Surface's hint, and Wayland has no such hint, which the environment says too (CanSkipTaskbar).
 
 // lookCSS clears the theme's background, border and shadow from windows of the classes NSGo gives them, and from a transparent one's box.
 const lookCSS = `
@@ -21,6 +21,11 @@ window.nsgo-no-shadow, window.nsgo-no-shadow.csd { box-shadow: none; }
 var (
 	gtkWidgetAddCSSClass               func(widget uintptr, class *byte)
 	gtkWidgetRemoveCSSClass            func(widget uintptr, class *byte)
+	gtkWidgetHasCSSClass               func(widget uintptr, class *byte) int32
+	gtkWindowGetTitlebar               func(window uintptr) uintptr
+	gtkWindowSetTitlebar               func(window, titlebar uintptr)
+	gtkHeaderBarNew                    func() uintptr
+	gtkWidgetUnrealize                 func(widget uintptr)
 	gdkDisplayIsComposited             func(display uintptr) int32
 	gdkDisplayIsRGBA                   func(display uintptr) int32
 	gdkX11SurfaceSetSkipTaskbarHint    func(surface uintptr, skip int32)
@@ -29,6 +34,11 @@ var (
 	bindLook = sync.OnceFunc(func() {
 		purego.RegisterLibFunc(&gtkWidgetAddCSSClass, gtkLib, "gtk_widget_add_css_class")
 		purego.RegisterLibFunc(&gtkWidgetRemoveCSSClass, gtkLib, "gtk_widget_remove_css_class")
+		purego.RegisterLibFunc(&gtkWidgetHasCSSClass, gtkLib, "gtk_widget_has_css_class")
+		purego.RegisterLibFunc(&gtkWindowGetTitlebar, gtkLib, "gtk_window_get_titlebar")
+		purego.RegisterLibFunc(&gtkWindowSetTitlebar, gtkLib, "gtk_window_set_titlebar")
+		purego.RegisterLibFunc(&gtkHeaderBarNew, gtkLib, "gtk_header_bar_new")
+		purego.RegisterLibFunc(&gtkWidgetUnrealize, gtkLib, "gtk_widget_unrealize")
 		purego.RegisterLibFunc(&gdkDisplayIsComposited, gtkLib, "gdk_display_is_composited")
 		purego.RegisterLibFunc(&gdkDisplayIsRGBA, gtkLib, "gdk_display_is_rgba")
 		if _, err := purego.Dlsym(gtkLib, "gdk_x11_surface_set_skip_taskbar_hint"); err == nil {
@@ -107,14 +117,54 @@ func (w *window) setTransparent(on bool) {
 }
 
 // setShadow keeps the shadow GTK draws around the window, or clears it.
+// Client decorations let the same CSS remove it on desktops that otherwise
+// draw a server-side frame. Once installed, the header stays when the shadow
+// comes back, avoiding another surface replacement.
 func (w *window) setShadow(on bool) {
 	if w.win != 0 {
+		bindLook()
 		w.setCSSClass("nsgo-no-shadow", !on)
+		if !on && gtkWindowGetTitlebar(w.win) == 0 && gtkWidgetHasCSSClass(w.win, cstr("csd")) == 0 && gtkWidgetHasCSSClass(w.win, cstr("solid-csd")) == 0 {
+			mapped := gtkWidgetGetMapped(w.win) != 0
+			focus := gtkWindowGetFocus(w.win)
+			editor := w.focusedEntry()
+			var selection driver.TextRange
+			if editor != nil {
+				start, end := w.selection(editor)
+				text := w.editorText(editor)
+				selection = driver.TextRange{Start: unitsOf(text, start), End: unitsOf(text, end)}
+			}
+			if focus != 0 {
+				gObjectRefSink(focus)
+			}
+			// Changing between server and client decorations replaces the
+			// native surface. Unmap it explicitly before GTK unrealizes it.
+			if mapped {
+				gtkWidgetSetVisible(w.win, 0)
+			}
+			gtkWidgetUnrealize(w.win)
+			gtkWindowSetTitlebar(w.win, gtkHeaderBarNew())
+			w.input.stale = true
+			if mapped {
+				gtkWidgetShow(w.win)
+			}
+			if w.opts.SkipTaskbar {
+				w.setSkipTaskbar(true)
+			}
+			if focus != 0 {
+				gtkWindowSetFocus(w.win, focus)
+				gObjectUnref(focus)
+			}
+			if editor != nil {
+				w.selectRange(editor, selection)
+			}
+		}
 	}
 }
 
 // setSkipTaskbar keeps the window off the X11 task list, or puts it back; elsewhere it does nothing, as CanSkipTaskbar says.
 func (w *window) setSkipTaskbar(on bool) {
+	w.opts.SkipTaskbar = on
 	if w.win == 0 || !skipTaskbarHint() {
 		return
 	}
