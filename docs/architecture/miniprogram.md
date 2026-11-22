@@ -59,6 +59,8 @@ Text fields are WeChat's `input` and `textarea` in their content box, which leav
 
 Alerts are the platform's modal or action sheet, the clipboard holds text, storage is the mini program's under the app's prefix, photos come from `chooseMedia` and files from a chat (`chooseMessageFile`, which Alipay lacks). A link goes on the clipboard, as a mini program opens no browser. Requests the platform has no API for are answered as failed.
 
+`nsgoMP.updates` retains the platform update manager's cold-start check, readiness and failure events before the Go module starts. `updater.Check` answers from that snapshot or waits for its terminal event; confirming a prepared update requests restart and calls the manager's `applyUpdate`. The runtime exposes no made-up version label. Managers missing the required methods answer unavailable. Published WeChat/QQ/Alipay/Douyin upgrades remain unverified; the runtime and Go bridge are covered by stand-ins.
+
 ## The package
 
 `WXWebAssembly` and its likes load only files of the code package, `.wasm.br` among them, and every platform holds each package to 2 MB, so the module goes in a subpackage of its own, which the page loads before it, and its size decides which apps fit:
