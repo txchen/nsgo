@@ -173,7 +173,7 @@ type nsisData struct {
 	Publisher, Copyright string
 	// ARM64 has the installer refuse other systems.
 	ARM64 bool
-	// Command has the installer put its folder on the user's Path, for the command companion, and the uninstaller take it off.
+	// Command has the installer put its folder on the user's Path, for the command companion and the app's commands, and the uninstaller take it off.
 	Command bool
 	// SignUninstaller is the command that signs the uninstaller makensis
 	// writes, which a signed app needs signed too; empty when the app
@@ -206,7 +206,7 @@ func nsisScript(ctx context.Context, p *project, dir, arch string) (*nsisData, e
 		Publisher:    p.windowsPublisher(),
 		Copyright:    p.Copyright,
 		ARM64:        arch == "arm64",
-		Command:      p.windowsCommandLine(),
+		Command:      p.windowsCommandLine() || p.windowsPath(),
 		Excludes:     []string{p.Name + ".nsi", "*-setup.exe"},
 	}
 	if p.signingWindows() && p.Release {
@@ -299,8 +299,9 @@ const nsisCloseApp = `$$d = $$env:NSGO_APP_DIR.TrimEnd('\') + '\'; ` +
 	`$$p | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; ` +
 	`Start-Sleep -Milliseconds 500`
 
-// nsisUserPath updates the user's Path for the command companion without
-// expanding existing environment references or truncating long values.
+// nsisUserPath updates the user's Path for the command companion and the
+// app's commands without expanding existing environment references or
+// truncating long values.
 const nsisUserPath = `$$d = $$env:NSGO_APP_DIR.TrimEnd('\\'); ` +
 	`$$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment'); ` +
 	`$$p = @(([string]$$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';' | Where-Object { $$_ }); ` +
@@ -467,7 +468,7 @@ FunctionEnd
 !insertmacro RemoveFileTypes "un."
 {{- if .Command}}
 
-; Put the command companion's folder on the user's Path and remove it on uninstall.
+; Put the app's folder, with its command companion and commands, on the user's Path and remove it on uninstall.
 !macro UserPath un
 Function ${un}UserPath
   Push $0

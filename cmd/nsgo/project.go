@@ -152,6 +152,8 @@ type project struct {
 	FileTypes []fileType `yaml:"file_types"`
 	// URLSchemes are the schemes of the app's own links, which its macOS package registers (urlschemes.go).
 	URLSchemes []string `yaml:"url_schemes"`
+	// Commands are command-line programs the app's desktop packages ship beside its executable (commands.go).
+	Commands []command `yaml:"commands"`
 	// Widgets are the kinds of the app's widgets, which nsgo build puts
 	// into its macOS and iOS packages as a widget extension (widgets.go).
 	Widgets []widgetKind `yaml:"widgets"`
@@ -188,9 +190,10 @@ type project struct {
 		Category      string         `yaml:"category"`
 		Entitlements  map[string]any `yaml:"entitlements"`
 	} `yaml:"macos"`
-	// Windows is the Windows target's options: CommandLine adds a .com console companion beside the GUI executable, while InstallerIcon and UninstallerIcon, an .ico or a square PNG, are the icons of the setup program and the uninstaller, else the app's. DeviceCapabilities are the devices a store build's MSIX declares the app uses, such as microphone and webcam, which Windows asks the user for and keeps under the package's name. Publisher is who publishes the app, the CompanyName of its executables and its installer and the publisher of its uninstall entry, else Store's publisher name. Store is the Microsoft Store's package identity, as Partner Center lists it, which a store build's MSIX carries (msix.go): the package's name, its publisher (CN=...) and the publisher's display name.
+	// Windows is the Windows target's options: CommandLine adds a .com console companion beside the GUI executable, and it or Path has the installer put the app's folder on the user's Path, so consoles find the companion and the app's commands, while InstallerIcon and UninstallerIcon, an .ico or a square PNG, are the icons of the setup program and the uninstaller, else the app's. DeviceCapabilities are the devices a store build's MSIX declares the app uses, such as microphone and webcam, which Windows asks the user for and keeps under the package's name. Publisher is who publishes the app, the CompanyName of its executables and its installer and the publisher of its uninstall entry, else Store's publisher name. Store is the Microsoft Store's package identity, as Partner Center lists it, which a store build's MSIX carries (msix.go): the package's name, its publisher (CN=...) and the publisher's display name.
 	Windows struct {
 		CommandLine        bool     `yaml:"command_line"`
+		Path               bool     `yaml:"path"`
 		Publisher          string   `yaml:"publisher"`
 		InstallerIcon      string   `yaml:"installer_icon"`
 		UninstallerIcon    string   `yaml:"uninstaller_icon"`
@@ -402,6 +405,9 @@ func load(dir string) (*project, error) {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
 	if err := p.validateURLSchemes(); err != nil {
+		return nil, fmt.Errorf("nsgo.yaml: %w", err)
+	}
+	if err := p.validateCommands(); err != nil {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
 	if err := p.validateWidgets(); err != nil {
