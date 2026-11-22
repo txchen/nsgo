@@ -56,6 +56,8 @@ go tool nsgo build -release-notes notes.md  # the release's notes, which the upd
 
 Packages land in `dist/<name>-<version>-<target>`, and everything to hand out in `dist/releases`, each file named `<name>-<version>-<system>-<arch>` with its `.sha256`. Direct releases with macOS or Windows installers also write a Homebrew cask (`dist/releases/homebrew/<slug>.rb`, with `auto_updates true`) and a winget multi-file manifest (`dist/releases/winget/`). Builds are release builds; `go tool nsgo dev -release` runs one with hot reload for measuring.
 
+`sign.certificate` also signs the Store channel's MSIX in Go. For installation outside the Store, match the certificate subject to `windows.store.publisher` and use a certificate the receiving Windows machine trusts; without signing settings, the Store signs the uploaded package. See [Windows signing](https://nsgo.dev/docs/building.md#sign-windows-packages).
+
 On the store channel, `-target macos` and `-target macos_universal` write one universal Mac App Store PKG. `-target android_arm64,android_x64` writes one AAB for both ABIs and needs an NDK for x86_64 ([Building](https://nsgo.dev/docs/building.md#store-packages)).
 
 Android store builds require API 36 or higher. Record outstanding store questionnaires in `compliance` and declare Apple's export compliance in `apple.info` ([Store compliance](https://nsgo.dev/docs/building.md#store-compliance)).

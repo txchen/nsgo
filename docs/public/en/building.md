@@ -216,7 +216,7 @@ sign:
 
 The runtime targets API 36 when `android.target_sdk` is unset. An Android App Bundle build fails below API 36, which [Google Play requires](https://support.google.com/googleplay/android-developer/answer/11926878) for new mobile apps and updates from August 31, 2026. A standalone APK build warns and continues.
 
-Set `sign.macos_profile` to sign the Mac package for upload. The unsigned package still runs in the sandbox, which lets you test access to the app's container, the network and the files the user picks. Store builds currently refuse widgets because they cannot share timelines from the sandbox. Upload the `.msix` in Partner Center and the `.aab` in Play Console. Submit `flatpak/<id>.yml` to Flathub once the release holds the archives it names. `flatpak-builder` builds it locally too. Windows installs an MSIX outside the Store only when it is signed, which the Store does.
+Set `sign.macos_profile` to sign the Mac package for upload. The unsigned package still runs in the sandbox, which lets you test access to the app's container, the network and the files the user picks. Store builds currently refuse widgets because they cannot share timelines from the sandbox. Upload the `.msix` in Partner Center and the `.aab` in Play Console. Submit `flatpak/<id>.yml` to Flathub once the release holds the archives it names. `flatpak-builder` builds it locally too. For installation outside the Store, set [`sign.certificate`](#sign-windows-packages) to sign the MSIX; its certificate subject must match `windows.store.publisher`, and the receiving machine must trust the certificate. Without signing settings the Store signs the uploaded package.
 
 On macOS and iOS, a scroll view's edge effects (`Scroll.EdgeEffects`), macOS backdrop blurs with no `IOS.BackdropMaterial`, and backdrop color filters (alone, or over a blur with no `IOS.BackdropMaterial`) draw through Core Animation's private `CABackdropLayer` and `CAFilter`, as AppKit's and UIKit's own materials and edge effects do, since no public API blurs by a radius, varies a blur across a view, or applies a backdrop color matrix. App Store review may reject apps that use private APIs: NSGo calls them only for scroll views with edge bars and those backdrop filters, but every macOS and iOS build contains their names.
 
@@ -520,7 +520,7 @@ The keystore's passwords come from `NSGO_KEYSTORE_PASSWORD` and `NSGO_KEY_PASSWO
 
 ### Sign Windows packages
 
-A Windows download that carries no Authenticode signature or one from a certificate SmartScreen does not know shows a warning before it opens. `sign.certificate`, a `.pfx`, signs the executable, the command companion, the programs and libraries the app's resources bring, and the installer with its uninstaller; its password comes from `NSGO_CERTIFICATE_PASSWORD`. The signatures are made in Go, as `signtool` makes them, so a Mac signs them without the Windows SDK:
+A Windows download that carries no Authenticode signature or one from a certificate SmartScreen does not know shows a warning before it opens. `sign.certificate`, a `.pfx`, signs the executable, the command companion, the programs and libraries the app's resources bring, the installer with its uninstaller, and the MSIX built for the Store channel; its password comes from `NSGO_CERTIFICATE_PASSWORD`. The signatures are made in Go, as `signtool` makes them, so a Mac signs them without the Windows SDK:
 
 ```yaml
 sign:
