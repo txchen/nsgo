@@ -32,11 +32,13 @@ import (
 // .exe on Windows, and it comes from exactly one of Package, a Go main
 // package built with the app's GOOS and GOARCH and CGO_ENABLED=0, and
 // Paths, a prebuilt executable for each desktop target, relative to
-// nsgo.yaml.
+// nsgo.yaml. LDFlags are the package's own linker flags, each as go
+// build's -ldflags takes it, after the app's build.ldflags (commandLdflags).
 type command struct {
 	Name    string            `yaml:"name"`
 	Package string            `yaml:"package"`
 	Paths   map[string]string `yaml:"paths"`
+	LDFlags []string          `yaml:"ldflags"`
 }
 
 // commandTargets are the targets whose packages hold commands, for which
@@ -68,6 +70,9 @@ func (p *project) validateCommands() error {
 		}
 		if (c.Package == "") == (len(c.Paths) == 0) {
 			return fmt.Errorf("commands: %s needs exactly one of package and paths", c.Name)
+		}
+		if len(c.LDFlags) > 0 && c.Package == "" {
+			return fmt.Errorf("commands: %s's ldflags need a package to link; a prebuilt file is linked already", c.Name)
 		}
 		if c.Package != "" && (strings.HasPrefix(c.Package, "-") || strings.Contains(c.Package, "...") || strings.ContainsAny(c.Package, " \t\r\n")) {
 			return fmt.Errorf("commands: %s's package %q is not one Go package's path", c.Name, c.Package)
@@ -203,15 +208,23 @@ func (p *project) buildCommand(ctx context.Context, c command, target, out strin
 		args = append(args, "-trimpath", "-buildvcs=false")
 		ldflags = append(ldflags, "-s", "-w")
 	}
-	if len(ldflags) > 0 {
-		args = append(args, "-ldflags", strings.Join(ldflags, " "))
-	}
+	args = append(args, "-ldflags", p.commandLdflags(c, ldflags...))
 	build := exec.CommandContext(ctx, "go", append(args, "-o", out, "--", c.Package)...)
 	build.Dir, build.Env = p.Dir, append(os.Environ(), env...)
 	if data, err := build.CombinedOutput(); err != nil {
 		return fmt.Errorf("commands: go build %s failed\n%s", c.Package, strings.TrimSpace(string(data)))
 	}
 	return nil
+}
+
+// commandLdflags is the -ldflags value c's package links with: the app's own linker flags, build.ldflags and -ldflags, then c's, so its -X values win over the app's, then the identity the app takes in core.App, which a command reads as the app does and neither replaces, and extra, the tool's.
+func (p *project) commandLdflags(c command, extra ...string) string {
+	flags := append(append([]string{}, p.Build.LDFlags...), c.LDFlags...)
+	flags = append(flags, p.identityLdflags())
+	if p.Release {
+		flags = append(flags, "-X "+corePath+".appRelease=1")
+	}
+	return strings.Join(append(flags, extra...), " ")
 }
 
 // copyCommand copies c's prebuilt file for target to dst as an executable, thinning a universal macOS one to target's architecture.
@@ -335,10 +348,12 @@ func linuxExecutable(f *elf.File) bool {
 	return false
 }
 
-// signMacCommands signs the commands in a macOS app's Contents/MacOS, which the app's signature seals, with codesign's arguments for each from args. They take no entitlements: those are the app's, which a command run from a terminal is not.
+// signMacCommands signs the commands in a macOS app's Contents/MacOS, which the app's signature seals, with codesign's arguments for each from args, and <id>.<name> as each one's identifier in place of the one the linker gave it, a hash of its contents. They take no entitlements: those are the app's, which a command run from a terminal is not.
 func (p *project) signMacCommands(ctx context.Context, app string, args func(path string) []string) error {
 	for _, path := range p.commandFiles(filepath.Join(app, "Contents", "MacOS"), "macos") {
-		if err := run(ctx, "codesign", args(path)...); err != nil {
+		a := args(path)
+		a = append(a[:len(a)-1:len(a)-1], "--identifier", p.ID+"."+filepath.Base(path), path)
+		if err := run(ctx, "codesign", a...); err != nil {
 			return err
 		}
 	}

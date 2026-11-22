@@ -492,14 +492,19 @@ func (p *project) appLdflags() string {
 // corePath is package core's, which holds the app's identity (core.App).
 const corePath = "github.com/nsgo-dev/nsgo/core"
 
+// identityLdflags are the -X flags building nsgo.yaml's name, ID, version and build number into core.App, which the app and its commands take.
+func (p *project) identityLdflags() string {
+	return strings.Join([]string{xflag(corePath+".appName", p.Name), xflag(corePath+".appID", p.ID),
+		xflag(corePath+".appVersion", p.Version), xflag(corePath+".appBuild", p.BundleVersion())}, " ")
+}
+
 // ldflags builds nsgo.yaml's name, ID, version and build number into
 // core.App, and passes the rest of what nsgo.Run takes from it.
 func (p *project) ldflags(extra ...string) string {
 	const pkg = "github.com/nsgo-dev/nsgo"
 	// The dev client, which nsgo.Run starts in dev builds.
 	const devPkg = pkg + "/internal/dev"
-	flags := strings.Join([]string{xflag(corePath+".appName", p.Name), xflag(corePath+".appID", p.ID),
-		xflag(corePath+".appVersion", p.Version), xflag(corePath+".appBuild", p.BundleVersion())}, " ")
+	flags := p.identityLdflags()
 	// The linker keeps the last -X of a variable, so the app's flags go first and cannot replace the tool's.
 	if app := p.appLdflags(); app != "" {
 		flags = app + " " + flags

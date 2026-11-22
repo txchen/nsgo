@@ -47,6 +47,8 @@ func TestCommandsConfig(t *testing.T) {
 		{"commands: [{name: gv, package: -toolexec=x}]", "is not one Go package's path"},
 		{"commands: [{name: gv, paths: {macos_universal: bin/gv}}]", `paths name "macos_universal"`},
 		{"commands: [{name: gv, paths: {linux_x64: ''}}]", "linux_x64 path is empty"},
+		{"commands: [{name: gv, package: ./cmd/gv, ldflags: [-X main.channel=beta]}]", ""},
+		{"commands: [{name: gv, paths: {linux_x64: bin/gv}, ldflags: [-X main.channel=beta]}]", "ldflags need a package"},
 	} {
 		dir := t.TempDir()
 		manifest := "name: GoVault\nid: dev.example.govault\n" + c.yaml + "\n"
@@ -70,7 +72,7 @@ func commandFixture(t *testing.T) *project {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{
 		"go.mod":           "module example.com/fixture\n\ngo 1.26\n",
-		"cmd/tool/main.go": "package main\n\nfunc main() { println(\"tool\") }\n",
+		"cmd/tool/main.go": "package main\n\nimport \"fmt\"\n\nvar version, channel = \"dev\", \"stable\"\n\nfunc main() { fmt.Println(version, channel) }\n",
 		"lib/lib.go":       "package lib\n",
 	})
 	t.Setenv("GOWORK", "off")
@@ -156,6 +158,44 @@ func TestAddCommands(t *testing.T) {
 		t.Errorf("tool is a %v %v", f.Cpu, f.Type)
 	}
 	f.Close()
+}
+
+// A command links with the app's linker flags, then its own, whose -X values win, and the identity core.App reads, which neither replaces.
+func TestCommandLdflags(t *testing.T) {
+	p := commandFixture(t)
+	p.Build.LDFlags = []string{"-X main.version=1.0.0", "-X main.channel=app"}
+	c := command{Name: "tool", Package: "./cmd/tool", LDFlags: []string{"-X 'main.channel=beta builds'"}}
+	flags := p.commandLdflags(c, "-s", "-w")
+	for _, part := range []string{"-X main.version=1.0.0", "-X main.channel=app", "-X 'main.channel=beta builds'", "-X '" + corePath + ".appVersion=1.0.0'", "-X '" + corePath + ".appID=dev.example.app'", "-X " + corePath + ".appRelease=1", "-s -w"} {
+		if !strings.Contains(flags, part) {
+			t.Errorf("ldflags %q lack %q", flags, part)
+		}
+	}
+	if strings.Index(flags, "main.channel=app") > strings.Index(flags, "main.channel=beta") || strings.Index(flags, "main.channel=beta") > strings.Index(flags, corePath) {
+		t.Errorf("ldflags %q are out of order", flags)
+	}
+
+	// Built for this machine, the command runs with the values its flags gave.
+	system, arch := runtime.GOOS, goArchName(runtime.GOARCH)
+	if system == "darwin" {
+		system = "macos"
+	}
+	target := system + "_" + arch
+	if !slices.Contains(commandTargets, target) {
+		t.Skipf("no command target for %s", target)
+	}
+	p.Commands = []command{c}
+	dir := t.TempDir()
+	if err := p.addCommands(t.Context(), target, dir); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(filepath.Join(dir, commandFile("tool", target))).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "1.0.0 beta builds" {
+		t.Errorf("the command prints %q, want its version and channel from the flags", got)
+	}
 }
 
 func TestAddCommandsRefuses(t *testing.T) {
@@ -245,7 +285,7 @@ func TestSignMacAppSignsCommandsBeforeBundle(t *testing.T) {
 	if want := []string{"fixture.dylib", "tool", "App.app"}; !slices.Equal(order, want) {
 		t.Fatalf("signed %q, want %q", order, want)
 	}
-	if want := "--force --sign " + p.Sign.Identity + " --options runtime --timestamp " + filepath.Join(app, "Contents", "MacOS", "tool"); lines[1] != want {
+	if want := "--force --sign " + p.Sign.Identity + " --options runtime --timestamp --identifier dev.example.app.tool " + filepath.Join(app, "Contents", "MacOS", "tool"); lines[1] != want {
 		t.Errorf("the command is signed with %q, want %q", lines[1], want)
 	}
 	if !strings.Contains(lines[2], "--entitlements") {
