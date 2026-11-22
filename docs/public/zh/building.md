@@ -19,7 +19,7 @@ go tool nsgo build
 | --- | --- |
 | `*.dmg`、`*-setup.exe`、`*.deb`、`*.pkg.tar.gz`、`*.AppImage` | macOS、Windows 和 Linux 的[安装程序](#安装程序) |
 | `*-ios.ipa`、`*-tvos.ipa`、`*.apk` | iOS、tvOS 和 Android 的包，用于商店或设备 |
-| `*.pkg`、`*.msix`、`*.aab`、`*.tar.gz` 和 `flatpak/` | `store` 构建的[商店包](#商店包) |
+| `*.pkg`、`*.msix`、`*.aab`、`*.flatpak`、`*.tar.gz` 和 `flatpak/` | `store` 构建的[商店包](#商店包) |
 | `install.sh`、`install.ps1` | 从 [GitHub Releases](#发布到-github) 安装应用的脚本 |
 | `appcast-<目标>.xml` | [自动更新](#自动更新)的应用读取的更新源 |
 | `homebrew/<name>.rb`、`winget/` | direct 发布的 [Homebrew cask 与 winget 清单](#渠道) |
@@ -172,7 +172,7 @@ windows:
 | --- | --- |
 | macOS | 用于 Mac App Store 的 `<name>-<version>-macos-<arch>.pkg`：应用运行在 App Sandbox 中，用描述文件对应的身份签名，再用团队的安装器身份打包 |
 | Windows | 用于 Microsoft Store 的 `<name>-<version>-windows-<arch>.msix`，发布时由商店签名 |
-| Linux | 带应用 AppStream 元数据的 `<name>-<version>-linux-<arch>.tar.gz`，以及 `flatpak/<id>.yml`：Flathub 据此构建 Flatpak 的清单，在 GNOME 运行时上从 Release 下载这些归档 |
+| Linux | 可直接安装的 `<name>-<version>-linux-<arch>.flatpak`，另带含 AppStream 元数据的 `.tar.gz` 和 `flatpak/<id>.yml`，供 Flathub 或 flatpak-builder 在 GNOME 运行时上构建 |
 | Android | 用于 Google Play 的 App Bundle `<name>-<version>-android-<arch>.aab`，用上传密钥 `sign.keystore` 签名 |
 
 在商店渠道，`-target macos` 选择两种 macOS 架构，和 `-target macos_universal` 一样，生成一份 `<name>-<version>-macos-universal.pkg`。使用 `-target android_arm64,android_x64` 生成一份包含 `arm64-v8a` 和 `x86_64` 的 `<name>-<version>-android-universal.aab`。构建 x86_64 需要 Android NDK。
@@ -200,7 +200,7 @@ sign:
 
 未设置 `android.target_sdk` 时，运行时以 API 36 为目标。[Google Play](https://support.google.com/googleplay/android-developer/answer/11926878) 自 2026 年 8 月 31 日起要求新移动应用和更新以 API 36 为最低目标。低于 API 36 时，Android App Bundle 构建失败，独立 APK 构建发出警告后继续。
 
-没有 `sign.macos_profile` 时，Mac 包不签名：它能在你的 Mac 上以沙盒方式运行，可用来测试沙盒，但无法上传。沙盒中的应用只能访问自己的容器、网络和用户选择的文件；小组件暂时无法在沙盒中共享时间线，所以 store 构建会拒绝带小组件的应用。用 Transporter 上传 `.pkg`，在 Partner Center 上传 `.msix`，在 Play Console 上传 `.aab`；Release 中有了清单引用的归档后，把 `flatpak/<id>.yml` 提交到 Flathub，也可以用 `flatpak-builder` 在本地构建。Windows 只安装已签名的 MSIX，商店之外安装需要签名，上架时由商店签名。
+没有 `sign.macos_profile` 时，Mac 包不签名：它能在你的 Mac 上以沙盒方式运行，可用来测试沙盒，但无法上传。沙盒中的应用只能访问自己的容器、网络和用户选择的文件；小组件暂时无法在沙盒中共享时间线，所以 store 构建会拒绝带小组件的应用。用 Transporter 上传 `.pkg`，在 Partner Center 上传 `.msix`，在 Play Console 上传 `.aab`；Release 中有了清单引用的归档后，把 `flatpak/<id>.yml` 提交到 Flathub，也可以用 `flatpak-builder` 在本地构建。用 `flatpak install --user ./<name>-<version>-linux-<arch>.flatpak` 安装 bundle；需已安装匹配的 GNOME 运行时，或在配置的远程仓库中可取得它。构建以 Go 写出 bundle，无需 Linux 工具链。商店包在未提供图标时使用透明图标，未设置 `linux.categories` 时归入 Utility。Windows 只安装已签名的 MSIX，商店之外安装需要签名，上架时由商店签名。
 
 在 macOS 和 iOS 上，滚动视图的边缘效果（`Scroll.EdgeEffects`）、macOS 上没有指定 `IOS.BackdropMaterial` 的背景模糊 `Blur`，以及背景颜色滤镜（单独使用，或与没有指定 `IOS.BackdropMaterial` 的模糊组合使用）像 AppKit 和 UIKit 自己的材质与边缘效果一样，通过 Core Animation 的私有 `CABackdropLayer` 和 `CAFilter` 绘制，因为没有公开 API 能按半径模糊、让模糊程度在视图上渐变或对背景应用颜色矩阵。App Store 审核可能拒绝使用私有 API 的应用：NSGo 只在带边缘栏的滚动视图和这些背景滤镜中调用它们，但每个 macOS 和 iOS 构建都包含它们的名称。
 

@@ -19,7 +19,7 @@ Everything to hand out lands in `dist/releases`, the only directory to look in:
 | --- | --- |
 | `*.dmg`, `*-setup.exe`, `*.deb`, `*.pkg.tar.gz`, `*.AppImage` | [Installers](#installers) for macOS, Windows and Linux |
 | `*-ios.ipa`, `*-tvos.ipa`, `*.apk` | The iOS, tvOS and Android packages, for the stores or devices |
-| `*.pkg`, `*.msix`, `*.aab`, `*.tar.gz` and `flatpak/` | A `store` build's [store packages](#store-packages) |
+| `*.pkg`, `*.msix`, `*.aab`, `*.flatpak`, `*.tar.gz` and `flatpak/` | A `store` build's [store packages](#store-packages) |
 | `install.sh`, `install.ps1` | Scripts installing the app from [GitHub releases](#publish-on-github) |
 | `appcast-<target>.xml` | The feeds [updating](#updates) apps read |
 | `homebrew/<name>.rb`, `winget/` | Direct-release [Homebrew cask and winget manifests](#channels) |
@@ -188,7 +188,7 @@ A background PNG with a twin twice its size, such as `DMGBackground@2x.png`, sta
 | --- | --- |
 | macOS | `<name>-<version>-macos-<arch>.pkg` for the Mac App Store: the app in the App Sandbox, signed with the provisioning profile's identity and packaged with your team's installer identity |
 | Windows | `<name>-<version>-windows-<arch>.msix` for the Microsoft Store, which signs it on publishing |
-| Linux | `<name>-<version>-linux-<arch>.tar.gz` with the app's AppStream metadata, and `flatpak/<id>.yml`, the manifest Flathub builds the Flatpak from, which downloads those archives from the release on GNOME's runtime |
+| Linux | Installable `<name>-<version>-linux-<arch>.flatpak`, plus an AppStream-bearing `.tar.gz` and `flatpak/<id>.yml` for Flathub or flatpak-builder on GNOME's runtime |
 | Android | `<name>-<version>-android-<arch>.aab`, an App Bundle for Google Play signed with `sign.keystore`, the upload key |
 
 `-target macos` selects both macOS architectures on the store channel and writes one `<name>-<version>-macos-universal.pkg`, as does `-target macos_universal`. Select `-target android_arm64,android_x64` for one `<name>-<version>-android-universal.aab` containing `arm64-v8a` and `x86_64`. The x86_64 slice requires an Android NDK.
@@ -216,7 +216,7 @@ sign:
 
 The runtime targets API 36 when `android.target_sdk` is unset. An Android App Bundle build fails below API 36, which [Google Play requires](https://support.google.com/googleplay/android-developer/answer/11926878) for new mobile apps and updates from August 31, 2026. A standalone APK build warns and continues.
 
-Set `sign.macos_profile` to sign the Mac package for upload. The unsigned package still runs in the sandbox, which lets you test access to the app's container, the network and the files the user picks. Store builds currently refuse widgets because they cannot share timelines from the sandbox. Upload the `.msix` in Partner Center and the `.aab` in Play Console. Submit `flatpak/<id>.yml` to Flathub once the release holds the archives it names. `flatpak-builder` builds it locally too. Windows installs an MSIX outside the Store only when it is signed, which the Store does.
+Set `sign.macos_profile` to sign the Mac package for upload. The unsigned package still runs in the sandbox, which lets you test access to the app's container, the network and the files the user picks. Store builds currently refuse widgets because they cannot share timelines from the sandbox. Upload the `.msix` in Partner Center and the `.aab` in Play Console. Submit `flatpak/<id>.yml` to Flathub once the release holds the archives it names. `flatpak-builder` builds it locally too. Install a bundle with `flatpak install --user ./<name>-<version>-linux-<arch>.flatpak`; GNOME's matching runtime must be installed or available from a configured remote. Builds write the bundle in Go without a Linux toolchain. Store packages use a transparent icon when artwork is absent and Utility when `linux.categories` is unset. Windows installs an MSIX outside the Store only when it is signed, which the Store does.
 
 On macOS and iOS, a scroll view's edge effects (`Scroll.EdgeEffects`), macOS backdrop blurs with no `IOS.BackdropMaterial`, and backdrop color filters (alone, or over a blur with no `IOS.BackdropMaterial`) draw through Core Animation's private `CABackdropLayer` and `CAFilter`, as AppKit's and UIKit's own materials and edge effects do, since no public API blurs by a radius, varies a blur across a view, or applies a backdrop color matrix. App Store review may reject apps that use private APIs: NSGo calls them only for scroll views with edge bars and those backdrop filters, but every macOS and iOS build contains their names.
 
