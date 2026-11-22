@@ -95,6 +95,8 @@ textview.TextView{
 
 Formulas (`$…$`, `$$…$$`) show their TeX until the app passes `RenderMath: formula.RenderMath` from `base/formula`, which typesets them in the size and color of the text around them, read aloud in the app's language and copied as TeX; it adds about 6.5 MB to a desktop app and 3 MB gzipped to a web one, its font included. `formula.View` shows a formula anywhere else, in TeX or Typst.
 
+Display formulas wrap at safe relations and operators to the block's width inside its padding and borders, keeping the text's font size. Resizing or changing the text size reflows the lines. Unbreakable parts still scroll sideways; inline formulas keep their natural size.
+
 A `mermaid` code block shows its source until the app passes `RenderDiagram: diagram.RenderDiagram` from `base/diagram`, which draws it as a native diagram, with limu: flowcharts, sequence, class, state and entity relationship diagrams, Gantt charts, pies, mind maps, timelines and more, in the platform's font, light or dark as the app shows. It scrolls sideways when wider than the text, a copy takes its source, and a block still streaming in shows as code until it is complete. `diagram.View` shows a diagram anywhere else.
 
 `textview.Parse` reads Markdown and `textview.ParseHTML` reads HTML into blocks the app can also build. `Options.Streaming` repairs a document that arrives in pieces, closing what its end leaves open and holding back a last line whose meaning the next characters decide, such as a list marker alone, so a reply never flashes markers as text, and `StreamingCaret` draws a caret at its end, for a reply written as it streams.
