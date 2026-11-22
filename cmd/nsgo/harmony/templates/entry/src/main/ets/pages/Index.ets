@@ -156,6 +156,12 @@ interface TextRun {
   f?: string;
 }
 
+// TintedImage is a canvas image's copy multiplied by a tint, with the paint that last drew it.
+interface TintedImage {
+  pm: image.PixelMap;
+  paint: number;
+}
+
 interface CanvasOp {
   k: number;
   imgd?: string;
@@ -2176,13 +2182,17 @@ struct CanvasView {
   // images are the pictures drawings draw, decoded once; a repaint runs
   // when one arrives.
   private images: Map<string, image.PixelMap> = new Map();
-  private tintSource: image.PixelMap | undefined;
-  private tintColor: number = 0;
-  private tintImage: image.PixelMap | undefined;
+  // tinted holds each image's tinted copies by tint. A copy no paint drew for two paints is released; one the last paint drew is kept, since the Canvas may still read it.
+  private tinted: Map<image.PixelMap, Map<number, TintedImage>> = new Map();
+  private paints: number = 0;
   private loading: Set<string> = new Set();
   private missing: Set<string> = new Set();
 
   aboutToAppear(): void {
+  }
+
+  aboutToDisappear(): void {
+    this.releaseTints(this.paints + 1);
   }
 
   // roundRect adds a rounded rectangle to the current path.
@@ -2201,10 +2211,17 @@ struct CanvasView {
     ctx.closePath();
   }
 
-  // tintedImage multiplies the source's RGBA pixels in a separate canvas.
+  // tintedImage multiplies the source's RGBA pixels in a separate canvas, reusing the copy for that image and tint while paints draw it.
   private tintedImage(pm: image.PixelMap, tint: number): image.PixelMap {
-    if (this.tintSource === pm && this.tintColor === tint && this.tintImage !== undefined) {
-      return this.tintImage;
+    let byTint = this.tinted.get(pm);
+    if (byTint === undefined) {
+      byTint = new Map<number, TintedImage>();
+      this.tinted.set(pm, byTint);
+    }
+    const cached = byTint.get(tint);
+    if (cached !== undefined) {
+      cached.paint = this.paints;
+      return cached.pm;
     }
     const size = pm.getImageInfoSync().size;
     const ctx = new OffscreenCanvasRenderingContext2D(size.width, size.height,
@@ -2223,10 +2240,24 @@ struct CanvasView {
     }
     ctx.putImageData(pixels, 0, 0);
     const tinted = ctx.getPixelMap(0, 0, size.width, size.height);
-    this.tintSource = pm;
-    this.tintColor = tint;
-    this.tintImage = tinted;
+    const entry: TintedImage = { pm: tinted, paint: this.paints };
+    byTint.set(tint, entry);
     return tinted;
+  }
+
+  // releaseTints releases the tinted copies no paint since the paint before drew.
+  private releaseTints(before: number): void {
+    this.tinted.forEach((byTint: Map<number, TintedImage>, src: image.PixelMap) => {
+      byTint.forEach((t: TintedImage, tint: number) => {
+        if (t.paint < before) {
+          t.pm.release();
+          byTint.delete(tint);
+        }
+      });
+      if (byTint.size === 0) {
+        this.tinted.delete(src);
+      }
+    });
   }
 
   // drawImage draws an image op: at its natural size when W and H are 0,
@@ -2328,6 +2359,7 @@ struct CanvasView {
       console.error('NSGO harmony: canvas failed: ' + e);
       return;
     }
+    this.paints++;
     const caps: CanvasLineCap[] = ['butt', 'round', 'square'];
     const joins: CanvasLineJoin[] = ['miter', 'round', 'bevel'];
     const comps: string[] = ['source-over', 'source-in', 'source-out', 'source-atop',
@@ -2488,6 +2520,7 @@ struct CanvasView {
         }
       }
     }
+    this.releaseTints(this.paints - 1);
   }
 
   build() {
