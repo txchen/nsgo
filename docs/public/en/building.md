@@ -162,10 +162,10 @@ For the desktop targets, `build` writes what users install the app from into `di
 | Target | Installer |
 | --- | --- |
 | macOS | `<name>-<version>-macos-<arch>.dmg`, a disk image showing the app, an arrow and a link to Applications to drag it to, signed with `sign.identity` and [notarized](#notarize) |
-| Windows | `<name>-<version>-windows-<arch>-setup.exe`, an [NSIS](https://nsis.sourceforge.io) installer that installs for the user, again in the folder the user chose before, closing the app if it runs, with a Start menu shortcut, an optional desktop one and an uninstaller that removes only what it installed, [signed with `sign.certificate`](#sign-windows-packages) where the app signs Windows packages; `windows.command_line` also installs the `.com` companion and puts the app's folder on the user's `Path`, so consoles opened after installing run the app's command, while Win+R, which finds the companion too, starts the app and closes the console it opened |
+| Windows | `<name>-<version>-windows-<arch>-setup.exe`, a native Windows installer that installs for the user, again in the folder the user chose before, closing the app if it runs, with a Start menu shortcut, an optional desktop one and an uninstaller that removes only what it installed, [signed with `sign.certificate`](#sign-windows-packages) where the app signs Windows packages; `windows.command_line` also installs the `.com` companion and puts the app's folder on the user's `Path`, so consoles opened after installing run the app's command, while Win+R, which finds the companion too, starts the app and closes the console it opened |
 | Linux | `<name>-<version>-linux-<arch>.deb` for Debian and Ubuntu, and `<name>-<version>-linux-<arch>.pkg.tar.gz` for Arch Linux, which install the app in `/opt/<name>` with a command, its desktop entry and icon, and `<name>-<version>-linux-<arch>.AppImage`, which runs on any distribution without installing |
 
-The Windows installer needs NSIS's compiler, 3.06 or later, on a Mac `brew install makensis`, so a Mac builds every installer; without it `build` leaves the script, `<name>.nsi`, in the package, which compiles anywhere as it is. The installer speaks the languages of the app's catalogs that NSIS translates, Simplified and Traditional Chinese included, picking the system's. `-installers=false` or `build.installers: false` builds the packages alone.
+The Windows setup and uninstaller build with Go alone and use native Windows dialogs. They speak the supported languages of the app's catalogs, Simplified and Traditional Chinese included, picking the system's UI language. `/LANG=<LCID>` selects a UI language for a single invocation, such as `/LANG=2052` for Simplified Chinese. `/S` installs or uninstalls silently; a final `/D=<folder>` selects an install directory, including spaces, and `/RELAUNCH` opens the installed app after an update. Without `/D`, upgrades keep the registered directory. The installer adds a command's folder to the user's `Path` only when absent; the uninstaller removes only an entry the installer added. `-installers=false` or `build.installers: false` builds the packages alone.
 
 The installers take pictures and icons of the app's own; each is the app's icon or the built-in picture otherwise:
 
@@ -372,7 +372,7 @@ The channel decides who updates the app. `-channel` replaces `updates.channel` f
 | `steam` | Steam | Produce [depot directories](#steam-depots) that Steam updates |
 | `none` | Linux distributions and anyone who repackages the app | Check nothing |
 
-Stores reject apps that update themselves, so upload a `store` build, never a direct one. Each direct release with macOS or Windows installers also writes a Homebrew cask (`dist/releases/homebrew/<name>.rb`, declaring `auto_updates true`, checksums and download URLs for the built disk images) and a winget multi-file manifest (`dist/releases/winget/<id>.yaml`, `<id>.installer.yaml` and `<id>.locale.en-US.yaml` for the built NSIS installers). Wherever the system tells who installed the app, the app checks that too: an Android app from Google Play or another store, a Flatpak or Snap, and a TestFlight build check nothing, as their store updates them.
+Stores reject apps that update themselves, so upload a `store` build, never a direct one. Each direct release with macOS or Windows installers also writes a Homebrew cask (`dist/releases/homebrew/<name>.rb`, declaring `auto_updates true`, checksums and download URLs for the built disk images) and a winget multi-file manifest (`dist/releases/winget/<id>.yaml`, `<id>.installer.yaml` and `<id>.locale.en-US.yaml` for the built Windows installers). Wherever the system tells who installed the app, the app checks that too: an Android app from Google Play or another store, a Flatpak or Snap, and a TestFlight build check nothing, as their store updates them.
 
 ### Checking from the app
 
@@ -401,7 +401,7 @@ NSGo writes that filename under `$SNAP_USER_DATA/.config/autostart`, which snapd
 
 ## File types
 
-`file_types` registers the documents an app opens: from the Finder, the Dock and Open With on macOS, from Explorer's Open With through the NSIS installer or the MSIX on Windows, through the desktop entry of the Debian, Arch, AppImage and Flatpak packages on Linux, and through Open In on iOS:
+`file_types` registers the documents an app opens: from the Finder, the Dock and Open With on macOS, from Explorer's Open With through the Windows installer or the MSIX on Windows, through the desktop entry of the Debian, Arch, AppImage and Flatpak packages on Linux, and through Open In on iOS:
 
 ```yaml
 file_types:
@@ -535,7 +535,7 @@ sign:
   sign_command: "signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /a %1"
 ```
 
-Signing the uninstaller inside the installer needs NSIS 3.08 or later, and a certificate that is not a `.pfx` cannot sign it through `sign.certificate`. `-certificate`, `-sign-command` and `-timestamp-url` set these from the command line.
+The uninstaller is signed before it is embedded, using the same `sign.certificate` or `sign.sign_command` as the app and setup. `-certificate`, `-sign-command` and `-timestamp-url` set these from the command line.
 
 ### Notarize
 

@@ -26,7 +26,7 @@ import (
 //     release's macOS disk images (universal, dual-arch or single-arch).
 //   - winget/<id>.yaml, <id>.installer.yaml and <id>.locale.en-US.yaml:
 //     a winget multi-file manifest (schema 1.9.0) for the release's
-//     Windows NSIS installers.
+//     Windows installers.
 //
 // Like flatpak/<id>.yml, each scans the releases directory for this
 // version's installers so machines building separate architectures join
@@ -444,6 +444,7 @@ type wingetVersionManifest struct {
 }
 
 type wingetInstallerSwitches struct {
+	InstallLocation    string `yaml:"InstallLocation,omitempty"`
 	Silent             string `yaml:"Silent,omitempty"`
 	SilentWithProgress string `yaml:"SilentWithProgress,omitempty"`
 }
@@ -492,12 +493,12 @@ type wingetDefaultLocaleManifest struct {
 }
 
 // writeWingetManifest writes the version, installer and defaultLocale
-// manifests under winget/ in the releases directory for the Windows NSIS
+// manifests under winget/ in the releases directory for the Windows
 // installers built for this version.
 func (p *project) writeWingetManifest(ctx context.Context, base string) error {
 	var installers []wingetInstallerEntry
 	for _, arch := range []string{"x64", "arm64"} {
-		file := nsisSetupName(p, arch)
+		file := windowsSetupName(p, arch)
 		sum, ok, err := releaseFileSHA256(filepath.Join(p.releaseDir(), file))
 		if err != nil {
 			return err
@@ -540,10 +541,11 @@ func (p *project) writeWingetManifest(ctx context.Context, base string) error {
 		PackageIdentifier: pkgID,
 		PackageVersion:    p.Version,
 		InstallerLocale:   wingetDefaultLocale,
-		InstallerType:     "nullsoft",
+		InstallerType:     "exe",
 		Scope:             "user",
 		UpgradeBehavior:   "install",
 		InstallerSwitches: &wingetInstallerSwitches{
+			InstallLocation:    "/D=<INSTALLPATH>",
 			Silent:             "/S",
 			SilentWithProgress: "/S",
 		},
@@ -551,7 +553,7 @@ func (p *project) writeWingetManifest(ctx context.Context, base string) error {
 			DisplayName:    truncateRunes(singleLine(name), 256),
 			Publisher:      truncateRunes(singleLine(p.windowsPublisher()), 256),
 			DisplayVersion: truncateRunes(p.Version, 128),
-			InstallerType:  "nullsoft",
+			InstallerType:  "exe",
 		}},
 		Installers:      installers,
 		ManifestType:    "installer",

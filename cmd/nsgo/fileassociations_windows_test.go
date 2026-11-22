@@ -16,13 +16,10 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// TestWindowsFileAssociationsNative installs an isolated NSIS package, opens a spaced/Unicode path through its ProgID, upgrades its declarations and uninstalls it. Only the Test workflow opts into writing test keys.
+// TestWindowsFileAssociationsNative installs an isolated Go installer, opens a spaced/Unicode path through its ProgID, upgrades its declarations and uninstalls it. Only the Test workflow opts into writing test keys.
 func TestWindowsFileAssociationsNative(t *testing.T) {
 	if os.Getenv("NSGO_FILE_ASSOCIATIONS") == "" {
-		t.Skip("set NSGO_FILE_ASSOCIATIONS=1 to test NSIS install and uninstall")
-	}
-	if nsisCompiler() == "" {
-		t.Fatal("native file association verification needs NSIS")
+		t.Skip("set NSGO_FILE_ASSOCIATIONS=1 to test Windows install and uninstall")
 	}
 	dir, pkg, installed := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "installed app")
 	id := fmt.Sprintf("dev.nsgo.associations.%d", time.Now().UnixNano())
@@ -46,7 +43,7 @@ func main() {
 	if err := goBuild(t.Context(), p, filepath.Join(pkg, p.Name+".exe"), []string{"CGO_ENABLED=0"}); err != nil {
 		t.Fatal(err)
 	}
-	d, err := nsisScript(t.Context(), p, pkg, "x64")
+	d, err := windowsInstallerPlan(t.Context(), p, pkg, "x64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,12 +82,12 @@ func main() {
 	set(`Software\Classes\.`+ext+"old", "", "Other.Old")
 	install := func() {
 		t.Helper()
-		setup, err := buildNSIS(t.Context(), p, pkg, "x64")
+		setup, err := buildWindowsInstaller(t.Context(), p, pkg, "x64")
 		if err != nil {
 			t.Fatal(err)
 		}
 		cmd := exec.CommandContext(t.Context(), setup)
-		// NSIS requires /D to be last and unquoted, even with spaces.
+		// The installer accepts /D to be last and unquoted, even with spaces.
 		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `"` + setup + `" /S /D=` + installed}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("install: %v\n%s", err, out)
@@ -143,7 +140,7 @@ func main() {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("uninstall: %v\n%s", err, out)
 	}
-	// NSIS may finish deleting its self-copy just after the process that launched it exits. Wait briefly for the registry transaction to settle.
+	// The uninstaller may finish deleting its self-copy just after the process that launched it exits. Wait briefly for the registry transaction to settle.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		metaKey, metaErr := registry.OpenKey(registry.CURRENT_USER, meta, registry.READ)

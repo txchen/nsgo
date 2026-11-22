@@ -458,7 +458,7 @@ func buildTarget(ctx context.Context, p *project, target, dir string) error {
 			}
 			return p.releaseAssets(msix)
 		}
-		setup, err := buildNSIS(ctx, p, dir, arch)
+		setup, err := buildWindowsInstaller(ctx, p, dir, arch)
 		if err != nil {
 			return err
 		}

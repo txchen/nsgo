@@ -292,7 +292,7 @@ type project struct {
 		// FPS is no longer nsgo.yaml's: apps take --nsgo-fps.
 		FPS any `yaml:"fps"`
 		// Installers packages the desktop targets for users to install
-		// (installer.go): a disk image on macOS, an NSIS installer
+		// (installer.go): a disk image on macOS, a Windows installer
 		// on Windows, Debian and Arch packages on Linux; it defaults to
 		// true.
 		Installers *bool `yaml:"installers"`

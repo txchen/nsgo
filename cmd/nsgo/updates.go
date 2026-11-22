@@ -545,7 +545,7 @@ func (p *project) writeAppcast(target string, installers ...string) error {
 		}
 		if system == "windows" {
 			// The installer quits the app, installs quietly and starts the new
-			// version (nsis.go).
+			// version (windows_installer_plan.go).
 			item.arguments = "/S /RELAUNCH"
 		}
 		items = append(items, item)
