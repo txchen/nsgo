@@ -49,6 +49,8 @@ var (
 	iidGeolocationComplete = parseGUID("7668a704-244e-5e12-8dcb-92a3299eba26")
 	iidGeocoordinate       = parseGUID("ee21a3aa-976a-4c70-803d-083ea55bcbc4")
 	iidPositionHandler     = parseGUID("df3c6164-4e7b-5e8e-9a7e-13da059dec1e")
+	iidGeolocatorStatics   = parseGUID("9a8e7571-2df5-4591-9f87-eb5fd894e9b7")
+	iidAccessComplete      = parseGUID("f3524c93-e5c7-5b88-bedb-d3e637cff271")
 )
 
 const (
@@ -64,11 +66,20 @@ const (
 	geoCoordinateTimestamp   = 13
 	geoAddPositionChanged    = 15
 	geoRemovePositionChanged = 16
+	geoRequestAccess         = 6
 )
 
 // sensorLocation requests one Windows geolocation fix. The WinRT operation
 // completes off the window thread; only the copied driver fix crosses back.
 func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
+	if req.Command == driver.SensorRequestPermission {
+		w.requestWindowsLocationPermission(id, req)
+		return
+	}
+	if req.Command == driver.SensorReadPermission {
+		w.engine.Dispatch(driver.Event{Kind: driver.EventSensor, Count: id, Data: &driver.SensorReport{Generation: req.Generation, Grant: &driver.SensorGrant{Authorization: driver.SensorUnavailable}, End: true}})
+		return
+	}
 	if req.Kind != driver.SensorLocation && req.Kind != driver.SensorBackgroundLocation || req.Command != driver.SensorLocate && req.Command != driver.SensorWatchLocation {
 		w.engine.Dispatch(driver.NoSensor(&driver.MountItem{Count: id, Sensor: &req}))
 		return
@@ -159,6 +170,50 @@ func (w *window) sensorLocation(id uint32, req driver.SensorRequest) {
 		operation.release()
 		locator.release()
 		w.engine.Dispatch(driver.Event{Kind: driver.EventSensor, Count: id, Data: &driver.SensorReport{Generation: req.Generation, Error: "unavailable", End: true}})
+	}
+}
+
+func (w *window) requestWindowsLocationPermission(id uint32, req driver.SensorRequest) {
+	if req.Kind != driver.SensorLocation && req.Kind != driver.SensorBackgroundLocation {
+		w.engine.Dispatch(driver.NoSensor(&driver.MountItem{Count: id, Sensor: &req}))
+		return
+	}
+	comApartment()
+	statics := activationFactory(geolocatorClass, &iidGeolocatorStatics)
+	if statics == nil {
+		w.engine.Dispatch(driver.NoSensor(&driver.MountItem{Count: id, Sensor: &req}))
+		return
+	}
+	var operation *comObject
+	if failed(statics.call(geoRequestAccess, uintptr(unsafe.Pointer(&operation)))) || operation == nil {
+		statics.release()
+		w.engine.Dispatch(driver.NoSensor(&driver.MountItem{Count: id, Sensor: &req}))
+		return
+	}
+	completed := newHandler(&iidAccessComplete, func(_ uintptr, status unsafe.Pointer) {
+		var value int32
+		if uintptr(status) != geoAsyncCompleted || failed(operation.call(geoAsyncGetResults, uintptr(unsafe.Pointer(&value)))) {
+			value = 0
+		}
+		operation.release()
+		statics.release()
+		w.post(func() {
+			if !w.destroying {
+				auth := driver.SensorDenied
+				if value == 1 {
+					auth = driver.SensorGranted
+				}
+				w.engine.Dispatch(driver.Event{Kind: driver.EventSensor, Count: id, Data: &driver.SensorReport{Generation: req.Generation, Grant: &driver.SensorGrant{Authorization: auth}, End: true}})
+			}
+		})
+	})
+	completed.agile = true
+	hr := operation.call(geoAsyncPutCompleted, completed.ptr())
+	completed.release()
+	if failed(hr) {
+		operation.release()
+		statics.release()
+		w.engine.Dispatch(driver.NoSensor(&driver.MountItem{Count: id, Sensor: &req}))
 	}
 }
 
