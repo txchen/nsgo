@@ -161,33 +161,69 @@ func (v View) Render(cx *core.Scope) core.Node {
 			return core.Text{ContentFunc: source, Class: v.ErrorClass, Style: v.ErrorStyle, TestID: v.TestID}
 		},
 		Else: func(cx *core.Scope) core.Node {
-			return core.Canvas{
-				Class: v.Class,
-				StyleFunc: func() core.Style {
-					s := v.Style
-					if v.StyleFunc != nil {
-						s = s.Merge(v.StyleFunc())
+			hovered := core.NewSignal[*scene.Item](cx, nil)
+			canvasSize := core.NewSignal(cx, core.Size{})
+			at := func(p core.Point) *scene.Item {
+				sc := laid.Get().scene
+				sz := canvasSize.GetUntracked()
+				if sc == nil || sc.Width <= 0 || sc.Height <= 0 || sz.Width <= 0 || sz.Height <= 0 {
+					return nil
+				}
+				return itemAt(sc, scene.Point{X: float64(p.X) * sc.Width / float64(sz.Width), Y: float64(p.Y) * sc.Height / float64(sz.Height)}, 4*sc.Width/float64(sz.Width))
+			}
+			setHover := func(p core.Point) {
+				it := at(p)
+				if it == nil || it.Tooltip == "" {
+					it = nil
+				}
+				hovered.Set(it)
+			}
+			return core.View{
+				OnPress: func(e core.PressEvent) {
+					if it := at(e.Position); it != nil && it.Link != "" {
+						cx.OpenURL(it.Link, nil)
 					}
-					// The diagram's own size, which a container's stretch must not widen.
-					sc := laid.Get().scene
-					return core.Style{Width: core.Pt(core.Points(sc.Width)), Height: core.Pt(core.Points(sc.Height)), AlignSelf: core.AlignStart}.Merge(s)
 				},
-				TestID: v.TestID,
-				LabelFunc: func() string {
-					if v.Label != "" {
-						return v.Label
-					}
-					return label(msgs(), laid.Get().scene)
+				OnMouseMove:  func(e core.MouseEvent) { setHover(e.Position) },
+				OnMouseLeave: func(core.MouseEvent) { hovered.Set(nil) },
+				Tooltip: diagramTooltip{
+					open: func() bool { return hovered.Get() != nil },
+					text: func() string {
+						if it := hovered.Get(); it != nil {
+							return it.Tooltip
+						}
+						return ""
+					},
 				},
-				Draw: func(d *core.Drawing, sz core.Size) {
-					sc := laid.Get().scene
-					if sc == nil || sc.Width <= 0 || sc.Height <= 0 {
-						return
-					}
-					// A style that sets another size stretches the diagram to it.
-					d.Scale(float32(sz.Width)/float32(sc.Width), float32(sz.Height)/float32(sc.Height))
-					paint(d, sc, v.Theme.look(env.Dark()), m)
-				},
+				Children: []core.Node{core.Canvas{
+					Class: v.Class,
+					StyleFunc: func() core.Style {
+						s := v.Style
+						if v.StyleFunc != nil {
+							s = s.Merge(v.StyleFunc())
+						}
+						// The diagram's own size, which a container's stretch must not widen.
+						sc := laid.Get().scene
+						return core.Style{Width: core.Pt(core.Points(sc.Width)), Height: core.Pt(core.Points(sc.Height)), AlignSelf: core.AlignStart}.Merge(s)
+					},
+					OnLayout: func(b core.Bounds) { canvasSize.Set(b.Size) },
+					TestID:   v.TestID,
+					LabelFunc: func() string {
+						if v.Label != "" {
+							return v.Label
+						}
+						return label(msgs(), laid.Get().scene)
+					},
+					Draw: func(d *core.Drawing, sz core.Size) {
+						sc := laid.Get().scene
+						if sc == nil || sc.Width <= 0 || sc.Height <= 0 {
+							return
+						}
+						// A style that sets another size stretches the diagram to it.
+						d.Scale(float32(sz.Width)/float32(sc.Width), float32(sz.Height)/float32(sc.Height))
+						paint(d, sc, v.Theme.look(env.Dark()), m)
+					},
+				}},
 			}
 		},
 	}

@@ -252,7 +252,7 @@ What formulas cost an app, from a `ui.TextView` with and without `RenderMath` (2
 | --- | --- | --- |
 | A box stroked grown by half its width, lines stroked in pieces, halos drawn as glyphs in sixteen directions | Paths stroked as SVG strokes them, text stroked for halos | NSGo's canvas strokes as SVG does |
 | `Options.Scale`, `Fonts` of its own | The scene's size in points, the platform's fonts measured through the text engine | Diagrams follow the text size and the platform's text as text does |
-| Hovered and clicked items, links, tooltips, icons and images | None yet | Left for later ([roadmap](../roadmap.md#diagrams)) |
+| Hovered and clicked items, links and tooltips; icons and images | Links and tooltips follow `scene.Item` hit tests; icons and images remain absent | Icons and images remain in the [roadmap](../roadmap.md#diagrams) |
 
 ## Resizable panels
 
