@@ -95,6 +95,8 @@ textview.TextView{
 
 公式（`$…$`、`$$…$$`）默认显示 TeX 源码；应用传入 `base/formula` 的 `RenderMath: formula.RenderMath` 后才会排版，字号和颜色与周围文本一致，读屏时使用应用的语言，复制时得到 TeX。它会让桌面应用增大约 6.5 MB，网页应用增大约 3 MB（gzip 压缩后），其中包括字体。在其他地方显示公式用 `formula.View`，支持 TeX 和 Typst。
 
+源码分段到达时，为 `formula.View` 设置 `SourceFunc`，并设 `Streaming: true`，或让 `StreamingFunc` 读取应用的接收状态。这会在有效内容继续排版时隐藏可恢复错误和占位符的图形；接收完成后清除标记，显示仍然存在的错误。在 `TextView` 中，通过 `RenderMath` 返回这样的 `formula.View`，传入 `Math.TeX` 和 `Math.Display`，并让 `StreamingFunc` 读取同一接收状态。
+
 `mermaid` 代码块默认显示源码；应用传入 `base/diagram` 的 `RenderDiagram: diagram.RenderDiagram` 后，会用 limu 把它画成原生图表，支持流程图、时序图、类图、状态图、实体关系图、甘特图、饼图、思维导图、时间线等，使用平台字体，并随应用的浅色或深色外观切换。图比文本宽时可以横向滚动，复制时得到源码；仍在流式输出中的代码块会先显示为代码，写完后再画成图。在其他地方显示图表用 `diagram.View`。
 
 `textview.Parse` 读取 Markdown，`textview.ParseHTML` 读取 HTML，得到应用也可以自己构建的块。`Options.Streaming` 修复仍在到达的文档：补全末尾未闭合的语法，并暂缓显示含义还要由后续字符决定的最后一行，例如单独的列表标记，让回复不会把标记闪成文本；`StreamingCaret` 在末尾绘制光标，适合逐字生成的回复。
