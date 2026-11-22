@@ -29,9 +29,9 @@ func (s *surface) registerAutomation() {
 	liveMu.Unlock()
 }
 
-// liveSurfaceFor returns the running mini program's live surface for surface 0,
+// liveSurfaceFor returns the running mini program's live surface for surface 0 of its one graph,
 // or nil for any other ID or before Run has started the engine.
-func liveSurfaceFor(id uint32) testhost.Surface {
+func liveSurfaceFor(_ int, id uint32) testhost.Surface {
 	if id != 0 {
 		return nil
 	}
