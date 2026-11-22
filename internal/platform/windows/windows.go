@@ -1386,7 +1386,7 @@ func (w *window) apply(b *driver.MountBatch) {
 			continue
 		case driver.ItemSensor:
 			if it.Sensor.Command != driver.SensorStop {
-				w.engine.Dispatch(driver.NoSensor(it))
+				w.sensorLocation(it.Count, *it.Sensor)
 			}
 			continue
 		case driver.ItemBiometricAvailability, driver.ItemBiometricAuthenticate:
