@@ -74,7 +74,7 @@ cx.RegisterFont(data) // 一个 TrueType 或 OpenType 字体
 
 ## 选择与测量
 
-`SelectableOn` 让用户选择和复制文本，带 `Selectable` 的 `View` 让其中的文本按文档顺序一起选择，像网页一样。`SelectionColor` 设置高亮颜色。`OnTextSelection` 在用户移动选区时收到 `core.TextSelection`：选中的纯文本 `Text`、`Markdown` 和 `HTML`（保留区域内 `TextView` 解析出的块与行内结构以及带样式文本的格式，包括部分跨度与链接）、各文本的 `Ranges`，以及选区涉及的文本在该视图中的边界框 `Bounds`，可用于按 Markdown/HTML 复制、生词表或翻译选中的词；`desktop.LookUp` 在系统词典中查它们（[服务](services.md#打开链接与文件)）。`cx.MeasureText` 测量一个字符串在某个字体下的尺寸，适合按文本宽度排列的列；`OnTextLayout` 在每次布局后报告行。
+`SelectableOn` 让用户选择和复制文本，带 `Selectable` 的 `View` 让其中的文本按文档顺序一起选择，像网页一样。`SelectionColor` 设置高亮颜色。`OnTextSelection` 在用户移动选区时收到 `core.TextSelection`：选中的纯文本 `Text`、`Markdown` 和 `HTML`（保留区域内 `TextView` 解析出的块与行内结构以及带样式文本的格式，包括部分跨度与链接）、各文本的 `Ranges`，以及选区涉及的文本在该视图中的边界框 `Bounds`，可用于按 Markdown/HTML 复制、生词表或翻译选中的词；`desktop.LookUp` 在系统词典中查它们（[服务](services.md#打开链接与文件)）。`cx.MeasureText` 测量一个字符串在某个字体下的尺寸，适合按文本宽度排列的列；响应式函数调用它后会随可用字体变化而更新；`OnTextLayout` 在每次布局后报告行。
 
 ## 文档
 
@@ -93,7 +93,7 @@ textview.TextView{
 }
 ```
 
-公式（`$…$`、`$$…$$`）默认显示 TeX 源码；应用传入 `base/formula` 的 `RenderMath: formula.RenderMath` 后才会排版，字号和颜色与周围文本一致，读屏时使用应用的语言，复制时得到 TeX。它会让桌面应用增大约 6.5 MB，网页应用增大约 3 MB（gzip 压缩后），其中包括字体。在其他地方显示公式用 `formula.View`，支持 TeX 和 Typst。
+公式（`$…$`、`$$…$$`）默认显示 TeX 源码；应用传入 `base/formula` 的 `RenderMath: formula.RenderMath` 后才会排版，字号和颜色与周围文本一致，读屏时使用应用的语言，复制时得到 TeX。它会让桌面应用增大约 6.5 MB，网页应用增大约 3 MB（gzip 压缩后），其中包括字体。在其他地方显示公式用 `formula.View`，支持 TeX 和 Typst。配置的字体无法覆盖的文本（`\text{}` 或 Typst 字符串）使用系统字体，包括中日韩文字及其他文字系统；显式设置的 `formula.Fonts.Fallbacks` 优先。
 
 `mermaid` 代码块默认显示源码；应用传入 `base/diagram` 的 `RenderDiagram: diagram.RenderDiagram` 后，会用 limu 把它画成原生图表，支持流程图、时序图、类图、状态图、实体关系图、甘特图、饼图、思维导图、时间线等，使用平台字体，并随应用的浅色或深色外观切换。图比文本宽时可以横向滚动，复制时得到源码；仍在流式输出中的代码块会先显示为代码，写完后再画成图。在其他地方显示图表用 `diagram.View`。
 

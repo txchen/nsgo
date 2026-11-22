@@ -74,7 +74,7 @@ A text laid out before a font arrives is prepared again, and canvases run `Draw`
 
 ## Selection and measurement
 
-`SelectableOn` lets the user select and copy a text, and a `View` with `Selectable` makes its texts select together, in document order, as a web page's do. `SelectionColor` colors the highlight. `OnTextSelection` receives a `core.TextSelection` as the user moves the selection: its plain `Text`, `Markdown` and `HTML` (preserving the parsed inline and block structure of any `TextView`s and styled texts in the area, including partial spans and links), its per-text `Ranges` and the `Bounds` of the texts it touches, in the view, for copying as Markdown or HTML, a word list or a translation of the words selected; `desktop.LookUp` shows them in the system's dictionary ([services](services.md#opening-links-and-files)). `cx.MeasureText` measures a string in a font, for a column fitted to its text, and `OnTextLayout` reports the lines after each layout.
+`SelectableOn` lets the user select and copy a text, and a `View` with `Selectable` makes its texts select together, in document order, as a web page's do. `SelectionColor` colors the highlight. `OnTextSelection` receives a `core.TextSelection` as the user moves the selection: its plain `Text`, `Markdown` and `HTML` (preserving the parsed inline and block structure of any `TextView`s and styled texts in the area, including partial spans and links), its per-text `Ranges` and the `Bounds` of the texts it touches, in the view, for copying as Markdown or HTML, a word list or a translation of the words selected; `desktop.LookUp` shows them in the system's dictionary ([services](services.md#opening-links-and-files)). `cx.MeasureText` measures a string in a font, for a column fitted to its text; reactive functions that call it update when available fonts change, and `OnTextLayout` reports the lines after each layout.
 
 ## Documents
 
@@ -93,7 +93,7 @@ textview.TextView{
 }
 ```
 
-Formulas (`$…$`, `$$…$$`) show their TeX until the app passes `RenderMath: formula.RenderMath` from `base/formula`, which typesets them in the size and color of the text around them, read aloud in the app's language and copied as TeX; it adds about 6.5 MB to a desktop app and 3 MB gzipped to a web one, its font included. `formula.View` shows a formula anywhere else, in TeX or Typst.
+Formulas (`$…$`, `$$…$$`) show their TeX until the app passes `RenderMath: formula.RenderMath` from `base/formula`, which typesets them in the size and color of the text around them, read aloud in the app's language and copied as TeX; it adds about 6.5 MB to a desktop app and 3 MB gzipped to a web one, its font included. `formula.View` shows a formula anywhere else, in TeX or Typst. Text runs (`\text{}` or Typst strings) that its configured fonts cannot cover use the system fonts, including CJK and other scripts; explicit `formula.Fonts.Fallbacks` take priority.
 
 A `mermaid` code block shows its source until the app passes `RenderDiagram: diagram.RenderDiagram` from `base/diagram`, which draws it as a native diagram, with limu: flowcharts, sequence, class, state and entity relationship diagrams, Gantt charts, pies, mind maps, timelines and more, in the platform's font, light or dark as the app shows. It scrolls sideways when wider than the text, a copy takes its source, and a block still streaming in shows as code until it is complete. `diagram.View` shows a diagram anywhere else.
 

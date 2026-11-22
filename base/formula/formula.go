@@ -1,4 +1,4 @@
-// Package formula typesets math, written in TeX or Typst, with Untie (github.com/caelyreth/untie), and draws it as shapes in the font size and the text color it inherits: inline, on its text's baseline, or as a display formula of its own. Its font is New Computer Modern Math Book, embedded and loaded off the engine's goroutine as a formula first shows, or the app's through NewRenderer. textview.TextView draws its formulas so with RenderMath: formula.RenderMath.
+// Package formula typesets math, written in TeX or Typst, with Untie (github.com/caelyreth/untie), and draws it in the font size and the text color it inherits: inline, on its text's baseline, or as a display formula of its own. Its font is New Computer Modern Math Book, embedded and loaded off the engine's goroutine as a formula first shows, or the app's through NewRenderer. textview.TextView draws its formulas so with RenderMath: formula.RenderMath.
 package formula
 
 import (
@@ -71,7 +71,7 @@ func (v View) Render(cx *core.Scope) core.Node {
 		if failed {
 			return &layout{key: key, failed: true}
 		}
-		return r.parsed(key, ok)
+		return r.withSystemText(r.parsed(key, ok), cx.MeasureText, cx.Env().Language())
 	}, func(a, b *layout) bool { return a == b })
 	failed := core.NewMemo(cx, func() bool { return lay.Get().failed })
 	msgs := func() locales.Messages { return locales.For(cx) }
@@ -109,7 +109,18 @@ func (v View) Render(cx *core.Scope) core.Node {
 					d.Scale(scale, scale)
 					for _, run := range l.runs {
 						fill(d, run.paint, v.ErrorStyle.Color)
-						d.FillPath(run.path, core.NonZero)
+						if run.text != nil {
+							t := run.text
+							// Shape at the measured reference size too: browser
+							// fonts round advances differently at a one-point size.
+							d.Save()
+							d.Translate(t.x, t.y)
+							d.Scale(t.scale/referenceSize, t.scale/referenceSize)
+							d.FillText(t.text, 0, 0, t.font)
+							d.Restore()
+						} else {
+							d.FillPath(run.path, core.NonZero)
+						}
 					}
 				},
 			}
