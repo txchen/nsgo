@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/websocket"
+
 	"github.com/nsgo-dev/nsgo/internal/automation"
 )
 
@@ -359,7 +361,7 @@ func TestDevAutomationRefusesWhatItCannotDrive(t *testing.T) {
 		t.Errorf("-target android -automation -release: %v", err)
 	}
 	p.Dev.Target = "web"
-	if err := dev(context.Background(), p, devOptions{automation: true}); err == nil || !strings.Contains(err.Error(), "macOS, Android and Apple devices and simulators so far") {
+	if err := dev(context.Background(), p, devOptions{automation: true}); err == nil || !strings.Contains(err.Error(), "mini programs so far") {
 		t.Errorf("-automation -target web: %v", err)
 	}
 	for _, target := range []string{"native", "ios", "tvos", "watchos", "ios_simulator", "tvos_simulator", "watchos_simulator"} {
@@ -383,7 +385,17 @@ func TestDevAutomationRefusesWhatItCannotDrive(t *testing.T) {
 			t.Errorf("%s android -release: %v", goos, err)
 		}
 	}
-	for _, target := range []string{"web", "miniprogram_wechat"} {
+	for _, target := range miniProgramTargets() {
+		for _, goos := range []string{"darwin", "linux", "windows"} {
+			if err := automationTargetError(target, goos, false); err != nil {
+				t.Errorf("%s %s: %v", goos, target, err)
+			}
+			if err := automationTargetError(target, goos, true); err == nil || !strings.Contains(err.Error(), "-release") {
+				t.Errorf("%s %s -release: %v", goos, target, err)
+			}
+		}
+	}
+	for _, target := range []string{"web"} {
 		if err := automationTargetError(target, "darwin", false); err == nil {
 			t.Errorf("darwin %s unexpectedly allowed", target)
 		}
@@ -678,11 +690,264 @@ func TestAutomationSupportedTargets(t *testing.T) {
 		{"android", "windows", true},
 		{"web", "darwin", false},
 		{"ios_simulator", "darwin", true},
-		{"miniprogram_wechat", "darwin", false},
+		{"miniprogram_wechat", "darwin", true},
+		{"miniprogram_alipay", "linux", true},
 	}
 	for _, tc := range cases {
 		if got := automationSupported(tc.target, tc.hostOS); got != tc.want {
 			t.Errorf("automationSupported(%q, %q) = %v, want %v", tc.target, tc.hostOS, got, tc.want)
 		}
+	}
+}
+
+func TestMiniProgramAutomationBuildAndTokenInjection(t *testing.T) {
+	h := startHub(t)
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"go.mod":  "module mpauto\n\ngo 1.26\n",
+		"main.go": "package main\nfunc main() {}\n",
+	})
+	for _, mp := range miniProgramPlatforms {
+		t.Run(mp.name+"_automation", func(t *testing.T) {
+			p := &project{Dir: dir, Name: "Sample", ID: "dev.example.sample", Version: "1.0.0"}
+			opts := devOptions{server: h.srv, automation: true}
+			p.prepareDev(opts)
+			configureMiniProgramDev(p, opts)
+			cmd, done, err := goBuildCommand(t.Context(), p, filepath.Join(t.TempDir(), "app.wasm"),
+				[]string{"GOOS=js", "GOARCH=wasm"}, buildExtra{tags: miniprogramTags, flags: []string{"-trimpath", "-buildvcs=false"}}, "-s -w")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer done()
+
+			var tags, ldflags string
+			for i, a := range cmd.Args {
+				if strings.Contains(a, h.srv.token) {
+					t.Errorf("go build argument %q leaked run token", a)
+				}
+				if a == "-tags" && i+1 < len(cmd.Args) {
+					tags = cmd.Args[i+1]
+				}
+				if a == "-ldflags" && i+1 < len(cmd.Args) {
+					ldflags = cmd.Args[i+1]
+				}
+			}
+			parts := strings.Split(tags, ",")
+			for _, wantTag := range []string{"nsgominiprogram", "nsgo_noshader", "nsgodev", "nsgoautomation"} {
+				if !slices.Contains(parts, wantTag) {
+					t.Errorf("tags = %q, missing %q", tags, wantTag)
+				}
+			}
+			wantDevServer := "-X 'github.com/nsgo-dev/nsgo/internal/dev.devServer=" + h.srv.url() + "'"
+			if !strings.Contains(ldflags, wantDevServer) {
+				t.Errorf("ldflags = %q, missing %q", ldflags, wantDevServer)
+			}
+			if strings.Contains(ldflags, "core.appRelease=1") {
+				t.Errorf("automation ldflags unexpectedly set appRelease=1: %q", ldflags)
+			}
+			tokenFiles, _ := filepath.Glob(filepath.Join(p.cache(), "devtoken-*.go"))
+			if len(tokenFiles) != 1 {
+				t.Fatalf("devtoken overlay files = %v, want 1", tokenFiles)
+			}
+			data, err := os.ReadFile(tokenFiles[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), h.srv.token) || !strings.Contains(string(data), "NSGO_DEV_TOKEN") {
+				t.Errorf("devtoken overlay = %q, want NSGO_DEV_TOKEN with run token", data)
+			}
+
+			// config.js never contains the token or devServer URL.
+			outDir := t.TempDir()
+			if err := writeMiniProgram(p, mp, outDir, []byte("module")); err != nil {
+				t.Fatal(err)
+			}
+			cfgData, err := os.ReadFile(filepath.Join(outDir, "nsgo", "config.js"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(cfgData), h.srv.token) || strings.Contains(string(cfgData), h.srv.url()) {
+				t.Errorf("config.js leaked dev server or token: %s", cfgData)
+			}
+		})
+	}
+
+	// Plain dev (without -automation) and release builds strip all automation hooks and tokens.
+	for _, tc := range []struct {
+		name    string
+		release bool
+		dev     bool
+	}{
+		{"release", true, false},
+		{"plain_dev", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &project{Dir: dir, Name: "Sample", ID: "dev.example.sample", Version: "1.0.0", Release: tc.release}
+			if tc.dev {
+				opts := devOptions{server: h.srv, automation: false}
+				p.prepareDev(opts)
+				configureMiniProgramDev(p, opts)
+				// Mirror buildMiniProgram's non-automation clamping.
+				p.Release, p.Dev.Client = true, false
+			}
+			cmd, done, err := goBuildCommand(t.Context(), p, filepath.Join(t.TempDir(), "app.wasm"),
+				[]string{"GOOS=js", "GOARCH=wasm"}, buildExtra{tags: miniprogramTags})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer done()
+			for _, a := range cmd.Args {
+				if strings.Contains(a, "nsgoautomation") || strings.Contains(a, "nsgodev") || strings.Contains(a, "devServer") || strings.Contains(a, h.srv.token) {
+					t.Errorf("%s build unexpectedly included %q", tc.name, a)
+				}
+			}
+			if tokenFiles, _ := filepath.Glob(filepath.Join(p.cache(), "devtoken-*.go")); len(tokenFiles) != 0 {
+				t.Errorf("%s build unexpectedly wrote devtoken files: %v", tc.name, tokenFiles)
+			}
+		})
+	}
+}
+
+func TestMiniProgramAutomationWebSocketRelay(t *testing.T) {
+	h := startHub(t)
+	h.target = "miniprogram_wechat"
+
+	dial := func(path, token string) (*websocket.Conn, error) {
+		wsURL := strings.Replace(h.srv.url(), "http://", "ws://", 1) + path
+		cfg, err := websocket.NewConfig(wsURL, h.srv.url())
+		if err != nil {
+			return nil, err
+		}
+		if token != "" {
+			cfg.Header.Set(tokenHeader, token)
+		}
+		return websocket.DialConfig(cfg)
+	}
+
+	// Missing token is rejected before WebSocket upgrade.
+	if ws, err := dial("/_nsgo/events?devtools", ""); err == nil {
+		ws.Close()
+		t.Fatal("WebSocket without token unexpectedly connected")
+	}
+
+	// Connect DevTools page stream to ensure automation answers never leak to pages.
+	pageCtx, pageCancel := context.WithCancel(t.Context())
+	defer pageCancel()
+	pageReq, _ := http.NewRequestWithContext(pageCtx, http.MethodGet, h.srv.url()+"/_nsgo/devtools/stream", nil)
+	pageReq.Header.Set(tokenHeader, h.srv.token)
+	pageResp, err := http.DefaultClient.Do(pageReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pageResp.Body.Close()
+	pageLines := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(pageResp.Body)
+		for sc.Scan() {
+			if strings.HasPrefix(sc.Text(), "data: ") {
+				pageLines <- sc.Text()
+			}
+		}
+	}()
+	// Consume initial connected event.
+	<-pageLines
+
+	// First mini-program WebSocket connects and receives hello.
+	ws1, err := dial("/_nsgo/events?devtools", h.srv.token)
+	if err != nil {
+		t.Fatalf("dial ws1: %v", err)
+	}
+	var hello string
+	if err := websocket.Message.Receive(ws1, &hello); err != nil || hello != "hello" {
+		ws1.Close()
+		t.Fatalf("first WS message = %q, err = %v, want hello", hello, err)
+	}
+
+	// Status shows app connected, run 1, target miniprogram_wechat.
+	var st automation.StatusResult
+	if err := json.Unmarshal(answerOf(t, ask(t, h, h.bridgeToken, nil, automation.Status)).Result, &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.App || st.Run != 1 || st.Target != "miniprogram_wechat" {
+		t.Fatalf("status = %+v, want App=true Run=1 Target=miniprogram_wechat", st)
+	}
+
+	// A second concurrent mini-program WebSocket is refused (409 Conflict).
+	if ws2, err := dial("/_nsgo/events?devtools", h.srv.token); err == nil {
+		ws2.Close()
+		t.Fatal("second concurrent WebSocket unexpectedly connected")
+	}
+
+	// Relay an automation request over ws1 and answer it over ws1.
+	go func() {
+		var msg string
+		if err := websocket.Message.Receive(ws1, &msg); err != nil {
+			return
+		}
+		raw, ok := strings.CutPrefix(msg, "automation ")
+		if !ok {
+			return
+		}
+		var req automation.Request
+		json.Unmarshal([]byte(raw), &req)
+		ans := automation.Reply(req.ID, automation.WindowsResult{
+			Windows: []automation.Window{{ID: 0, Title: "Mini", Kind: "app", Width: 375, Height: 667, Default: true}},
+		}, nil)
+		ansJSON, _ := json.Marshal(ans)
+		// Send both a regular DevTools commit line and the automation answer line in one NDJSON frame.
+		frame := `{"type":"commit","surface":0}` + "\n" + `{"type":"automation","surface":0,"data":` + string(ansJSON) + "}\n"
+		websocket.Message.Send(ws1, frame)
+	}()
+
+	ans := answerOf(t, ask(t, h, h.bridgeToken, nil, automation.Windows))
+	if ans.Error != nil {
+		t.Fatalf("windows error: %v", ans.Error)
+	}
+	var wins automation.WindowsResult
+	if err := json.Unmarshal(ans.Result, &wins); err != nil {
+		t.Fatal(err)
+	}
+	if len(wins.Windows) != 1 || wins.Windows[0].Title != "Mini" || wins.Windows[0].Kind != "app" {
+		t.Fatalf("windows = %+v", wins.Windows)
+	}
+
+	// Verify the regular commit reached the DevTools page, while the automation answer did not.
+	select {
+	case line := <-pageLines:
+		if strings.Contains(line, `"type":"automation"`) {
+			t.Fatalf("automation answer leaked to DevTools page: %s", line)
+		}
+		if !strings.Contains(line, `"type":"commit"`) {
+			t.Fatalf("unexpected page line: %s", line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("DevTools page did not receive commit line")
+	}
+
+	// Closing ws1 disconnects the hub cleanly; a reconnect (after rebuild) increments Run to 2.
+	ws1.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		json.Unmarshal(answerOf(t, ask(t, h, h.bridgeToken, nil, automation.Status)).Result, &st)
+		if !st.App {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st.App {
+		t.Fatal("hub stayed connected after WebSocket closed")
+	}
+
+	ws3, err := dial("/_nsgo/events?devtools", h.srv.token)
+	if err != nil {
+		t.Fatalf("reconnect ws3: %v", err)
+	}
+	defer ws3.Close()
+	if err := websocket.Message.Receive(ws3, &hello); err != nil || hello != "hello" {
+		t.Fatalf("reconnect hello = %q, %v", hello, err)
+	}
+	json.Unmarshal(answerOf(t, ask(t, h, h.bridgeToken, nil, automation.Status)).Result, &st)
+	if !st.App || st.Run != 2 {
+		t.Fatalf("status after reconnect = %+v, want App=true Run=2", st)
 	}
 }

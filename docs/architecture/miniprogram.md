@@ -68,3 +68,12 @@ Alerts are the platform's modal or action sheet, the clipboard holds text, stora
 - TSX does not run: a mini program evaluates no code it did not ship, which the page's engine needs, and goja does not fit. The tool refuses apps that link `tsx`.
 
 `examples/embedded` compresses to 1.9 MB and `examples/gallery-miniprogram` to 2.0 MB, about 40 KB short of the limit. NSH's gallery in Go does not fit, and neither does an app of `ui`'s controls: a `ui.Button` links the SVG parser and `encoding/xml` for its busy spinner, so the mini program gallery styles `base`'s components as `ui` does.
+
+## Automation
+
+`nsgo dev -target miniprogram_<platform> -automation` drives the app in its developer tool's simulator:
+
+- `configureMiniProgramDev` stamps `devServer` (`http://127.0.0.1:<port>`) into the build with `-ldflags -X` and passes the run's token through `devTokenFile`'s main-package `-overlay` (`NSGO_DEV_TOKEN`, cleared by `devtools.Token()` before `App` runs), keeping the token off command lines and out of `nsgo/config.js`. Release builds and plain `nsgo dev` builds omit `nsgodev`, `nsgoautomation`, `devServer` and the token.
+- Mini programs have neither browser `fetch` nor `EventSource`, so `internal/devtools/server_miniprogram.go` connects to `/_nsgo/events?devtools` over a WebSocket (`nsgoMP.api.connectSocket`, normalized for Alipay in `api.js`) with `X-NSGo-Token` and sends DevTools and automation answers back as NDJSON frames over the same socket (using `nsgoMP.api.request` for one-shot calls such as `/_nsgo/reload`).
+- Under `nsgoautomation`, `internal/platform/miniprogram/automation.go` registers the running page as live surface `0` (`testsurface.go`). Because the logic layer cannot synthesize render-layer DOM events, presses, long presses, touches/drags, scrolls, field focus/edits (`Type`, `mod+a` + `Backspace`, `Enter`, `Escape`), back and alert answers dispatch directly through the mounter while emitting `fo`, `iv`, `sel` and `so` ops so the simulator stays in sync. Screenshots render the mounted view tree onto an offscreen 2D canvas (`toDataURL("image/png")`), falling back to software PNG rasterization when no canvas is available.
+- Automation builds stay stripped (`-s -w -trimpath -buildvcs=false`) and warn instead of failing if the extra automation agent pushes the local simulator module past the 2 MB release subpackage limit; release builds still enforce the limit.

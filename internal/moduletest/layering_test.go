@@ -208,11 +208,12 @@ func TestLayering(t *testing.T) {
 		check(target[0], target[1], "nsgodev")
 	}
 	check("js", "wasm", "nsgodev,nsgominiprogram,nsgo_noshader")
-	// nsgo dev -automation runs on macOS, Android and Apple devices and simulators (iOS, tvOS and watchOS).
+	// nsgo dev -automation runs on macOS, Android, Apple devices and simulators (iOS, tvOS and watchOS) and mini programs.
 	check("darwin", "arm64", "nsgodev,nsgoautomation")
 	check("android", "arm64", "nsgodev,nsgoautomation")
 	check("ios", "arm64", "nsgodev,nsgoautomation")
 	check("ios", "arm64", "nsgowatch,nsgodev,nsgoautomation")
+	check("js", "wasm", "nsgominiprogram,nsgo_noshader,nsgodev,nsgoautomation")
 }
 
 type listedPackage struct {

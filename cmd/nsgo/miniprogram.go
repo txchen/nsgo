@@ -96,13 +96,24 @@ var miniprogramTags = []string{"nsgominiprogram", "nsgo_noshader"}
 
 // buildMiniProgram writes the project to dir. The module is built with
 // encoding/json's first implementation, which is smaller, and when it is
-// still too large for its package, again without inlining.
+// still too large for its package, again without inlining. Release and plain
+// dev builds leave out the dev client and automation agent; nsgo dev
+// -automation links them with devServer and the run token injected via -X and
+// the overlay file while keeping the binary stripped.
 func buildMiniProgram(ctx context.Context, p *project, mp miniProgramPlatform, dir string) error {
-	// Stripped always, as anything larger does not load; and without the
-	// dev client, as the logic layer makes no requests to a dev server.
 	release, client := p.Release, p.Dev.Client
-	p.Release, p.Dev.Client = true, false
-	defer func() { p.Release, p.Dev.Client = release, client }()
+	devURL, devToken := p.devURL, p.devToken
+	automation := p.Dev.Client && p.Dev.Automation && !p.Release
+	if !automation {
+		// Stripped always, as anything larger does not load; and without the
+		// dev client, as ordinary mini-program builds connect to no dev server.
+		p.Release, p.Dev.Client = true, false
+		p.devURL, p.devToken = "", ""
+	}
+	defer func() {
+		p.Release, p.Dev.Client = release, client
+		p.devURL, p.devToken = devURL, devToken
+	}()
 	tmp, err := os.MkdirTemp("", "nsgo-miniprogram")
 	if err != nil {
 		return err
@@ -124,20 +135,33 @@ func buildMiniProgram(ctx context.Context, p *project, mp miniProgramPlatform, d
 	if tsx != "" {
 		return fmt.Errorf("mini programs run Go apps alone: this app links package tsx")
 	}
-	module, err := buildMiniProgramModule(ctx, p, wasm, env, nil)
+	var baseFlags, baseLDFlags []string
+	if automation {
+		// Keep automation builds stripped so they stay as small as possible
+		// while preserving core.App().Development == true.
+		baseFlags = []string{"-trimpath", "-buildvcs=false"}
+		baseLDFlags = []string{"-s -w"}
+	}
+	module, err := buildMiniProgramModule(ctx, p, wasm, env, baseFlags, baseLDFlags...)
 	if err != nil {
 		return err
 	}
 	if len(module) > packageLimit {
 		stage(ctx, "compiling Go without inlining")
-		if module, err = buildMiniProgramModule(ctx, p, wasm, env, []string{"-gcflags=all=-l"}); err != nil {
+		flags := append(append([]string(nil), baseFlags...), "-gcflags=all=-l")
+		if module, err = buildMiniProgramModule(ctx, p, wasm, env, flags, baseLDFlags...); err != nil {
 			return err
 		}
 	}
 	if len(module) > packageLimit {
-		return fmt.Errorf("the module is %s compressed, past the %s a mini program's package holds; "+
-			"leave out what the app does not show on phones, such as the editor, the terminal or TSX",
-			formatSize(int64(len(module))), formatSize(packageLimit))
+		if automation {
+			warnIn(ctx, "the automation module is %s compressed, past %s's %s release subpackage limit; release builds omit the automation agent",
+				formatSize(int64(len(module))), mp.title, formatSize(packageLimit))
+		} else {
+			return fmt.Errorf("the module is %s compressed, past the %s a mini program's package holds; "+
+				"leave out what the app does not show on phones, such as the editor, the terminal or TSX",
+				formatSize(int64(len(module))), formatSize(packageLimit))
+		}
 	}
 	stage(ctx, "writing the project")
 	if err := writeMiniProgram(p, mp, dir, module); err != nil {
@@ -151,8 +175,8 @@ func buildMiniProgram(ctx context.Context, p *project, mp miniProgramPlatform, d
 
 // buildMiniProgramModule builds the module to wasm and returns it
 // compressed.
-func buildMiniProgramModule(ctx context.Context, p *project, wasm string, env, flags []string) ([]byte, error) {
-	if err := goBuildWith(ctx, p, wasm, env, buildExtra{tags: miniprogramTags, flags: flags}); err != nil {
+func buildMiniProgramModule(ctx context.Context, p *project, wasm string, env, flags []string, ldflags ...string) ([]byte, error) {
+	if err := goBuildWith(ctx, p, wasm, env, buildExtra{tags: miniprogramTags, flags: flags}, ldflags...); err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(wasm)
@@ -375,12 +399,24 @@ func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+// configureMiniProgramDev sets p's dev server address (-ldflags -X) and run
+// token (main-package overlay devTokenFile) for nsgo dev -automation builds,
+// and clears them for all other mini-program builds.
+func configureMiniProgramDev(p *project, opts devOptions) {
+	if opts.automation && !opts.release && opts.server != nil {
+		p.devURL, p.devToken = opts.server.url(), opts.server.token
+	} else {
+		p.devURL, p.devToken = "", ""
+	}
+}
+
 // miniprogramSession writes the project into the dev cache and opens it in mp's developer tool: WeChat DevTools after each successful build, as it loads a rebuild only when the project is opened again, and the other tools once, as opening again would only bring their window forward on every rebuild.
-func miniprogramSession(mp miniProgramPlatform) session {
+func miniprogramSession(mp miniProgramPlatform, opts devOptions) session {
 	dir := func(p *project) string { return p.cache("dev", "miniprogram_"+mp.name) }
 	opened := false
 	return session{
 		build: func(ctx context.Context, p *project) error {
+			configureMiniProgramDev(p, opts)
 			return buildMiniProgram(ctx, p, mp, dir(p))
 		},
 		start: func(ctx context.Context, p *project) (app, error) {

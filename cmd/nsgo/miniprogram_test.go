@@ -49,7 +49,7 @@ func TestMiniProgramSessionReopensOnlyWeChat(t *testing.T) {
 	p := &project{Dir: t.TempDir()}
 	for _, target := range []string{"miniprogram_wechat", "miniprogram_alipay"} {
 		mp, _ := miniProgramPlatformOf(target)
-		s := miniprogramSession(mp)
+		s := miniprogramSession(mp, devOptions{})
 		for range 3 {
 			if _, err := s.start(t.Context(), p); err != nil {
 				t.Fatal(err)
@@ -286,6 +286,14 @@ func TestMiniProgramAlipayAPI(t *testing.T) {
 		showActionSheet(o) { o.success({ index: o.items.length - 1 }) },
 		getClipboard(o) { o.success({ text: 'copied' }) },
 		chooseImage(o) { o.success({ apFilePaths: ['a.png', 'b.png'] }) },
+		request(o) {
+			if (o.url.endsWith('/err')) o.fail({ status: 401, data: 'denied', headers: { x: '1' } })
+			else o.success({ status: 201, data: o.headers['X-NSGo-Token'] + ':' + o.data, headers: {} })
+		},
+		connectSocket(o) {
+			if (o.multiple) return { onMessage(cb) { this.cb = cb }, url: o.url, header: o.header }
+			return null
+		},
 	}`)
 	for _, c := range []struct{ script, want string }{
 		{"api.setStorageSync('k', 'v'); api.getStorageSync('k')", "v"},
@@ -299,6 +307,9 @@ func TestMiniProgramAlipayAPI(t *testing.T) {
 		{"api.chooseMedia({ count: 2, success: (x) => (r = x.tempFiles.map((f) => f.tempFilePath).join()) }); r", "a.png,b.png"},
 		{"typeof api.chooseMessageFile", "undefined"},
 		{"typeof api.getStorageInfoSync", "function"},
+		{"api.request({ url: 'http://127.0.0.1/ok', method: 'POST', header: {'X-NSGo-Token':'tok'}, data: 'body', success: (x) => (r = x.statusCode + ':' + x.data) }); r", "201:tok:body"},
+		{"api.request({ url: 'http://127.0.0.1/err', method: 'GET', header: {}, success: (x) => (r = x.statusCode + ':' + x.data) }); r", "401:denied"},
+		{"(() => { const t = api.connectSocket({ url: 'ws://127.0.0.1/_nsgo/events', header: {'X-NSGo-Token':'tok'} }); return t.url + ':' + t.header['X-NSGo-Token']; })()", "ws://127.0.0.1/_nsgo/events:tok"},
 	} {
 		v, err := vm.RunString(c.script)
 		if err != nil {

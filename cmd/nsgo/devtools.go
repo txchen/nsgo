@@ -43,40 +43,7 @@ func (s *devServer) serveDevTools() {
 		s.mu.Lock()
 		hub := s.hub
 		s.mu.Unlock()
-		fromApp := hub != nil
-		// An answer may carry a screenshot, as base64: under -automation a post takes longer lines.
-		limit := maxMessage
-		if fromApp {
-			limit = maxAnswer
-		}
-		sc := bufio.NewScanner(r.Body)
-		sc.Buffer(make([]byte, min(1<<16, limit)), limit)
-		for sc.Scan() {
-			line := bytes.TrimSpace(sc.Bytes())
-			if len(line) == 0 {
-				continue
-			}
-			// Only the automation's messages are read here, by the type the app writes first (devMessage); the rest go to the pages as they came.
-			if bytes.HasPrefix(line, automationMessage) {
-				var a struct {
-					Data json.RawMessage `json:"data"`
-				}
-				if fromApp && json.Unmarshal(line, &a) == nil {
-					hub.answered(a.Data)
-				}
-				continue
-			}
-			s.toPages(string(line))
-		}
-		if err := sc.Err(); err != nil {
-			status := http.StatusBadRequest
-			if errors.Is(err, bufio.ErrTooLong) {
-				status = http.StatusRequestEntityTooLarge
-			}
-			// The rest of the post is lost, an answer in it too: the request waiting fails now rather than when it times out.
-			if fromApp {
-				hub.lost(fmt.Sprintf("the app's answer was lost: %v", err))
-			}
+		if status, err := s.deliverDevToolsOut(r.Body, hub != nil); err != nil {
 			http.Error(w, err.Error(), status)
 		}
 	})
@@ -105,6 +72,50 @@ func (s *devServer) serveDevTools() {
 		}
 		s.send("devtools", compact.String())
 	})
+}
+
+// deliverDevToolsOut scans NDJSON messages from the app (from POST /_nsgo/devtools/out or an authenticated ?devtools WebSocket) and routes automation answers to the hub and everything else to DevTools pages.
+func (s *devServer) deliverDevToolsOut(r io.Reader, fromApp bool) (int, error) {
+	s.mu.Lock()
+	hub := s.hub
+	s.mu.Unlock()
+	fromApp = fromApp && hub != nil
+	// An answer may carry a screenshot, as base64: under -automation a post takes longer lines.
+	limit := maxMessage
+	if fromApp {
+		limit = maxAnswer
+	}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, min(1<<16, limit)), limit)
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		// Only the automation's messages are read here, by the type the app writes first (devMessage); the rest go to the pages as they came.
+		if bytes.HasPrefix(line, automationMessage) {
+			var a struct {
+				Data json.RawMessage `json:"data"`
+			}
+			if fromApp && json.Unmarshal(line, &a) == nil {
+				hub.answered(a.Data)
+			}
+			continue
+		}
+		s.toPages(string(line))
+	}
+	if err := sc.Err(); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, bufio.ErrTooLong) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		// The rest of the post is lost, an answer in it too: the request waiting fails now rather than when it times out.
+		if fromApp {
+			hub.lost(fmt.Sprintf("the app's answer was lost: %v", err))
+		}
+		return status, err
+	}
+	return 0, nil
 }
 
 // fromDevServer reports whether r may reach the app through DevTools, answering it when it may not: it must carry contentType, which a web page of another site cannot send without asking first, as the server never allows, and come from no web page or from the server's own. The app posts from Go, the DevTools page and a web app from the server's origin.

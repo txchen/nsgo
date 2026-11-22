@@ -40,13 +40,5 @@ func Token() string {
 
 // Fetch sends nsgo dev's server a request with the run's token (Token), and body as contentType when it has one.
 func Fetch(method, url, contentType string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, url, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("X-NSGo-Token", Token())
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	return http.DefaultClient.Do(req)
+	return fetch(method, url, contentType, body)
 }

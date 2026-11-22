@@ -119,6 +119,42 @@ function alipay(api, my) {
       },
     }
   }
+  api.request = (o) =>
+    call('request', {
+      url: o.url,
+      method: o.method,
+      headers: o.header,
+      data: o.data,
+      dataType: o.dataType || 'text',
+      success: (r) =>
+        o.success && o.success({ statusCode: r.status || 200, data: r.data, header: r.headers || {} }),
+      fail: (r) => {
+        if (r && typeof r.status === 'number' && o.success) {
+          o.success({ statusCode: r.status, data: r.data, header: r.headers || {} })
+        } else if (o.fail) {
+          o.fail(r)
+        }
+      },
+    })
+  api.connectSocket = (o) => {
+    if (typeof my.connectSocket !== 'function') return null
+    const task = my.connectSocket({
+      url: o.url,
+      header: o.header,
+      multiple: true,
+      success: o.success,
+      fail: o.fail,
+    })
+    if (task && typeof task.onMessage === 'function') return task
+    return {
+      onOpen: (cb) => my.onSocketOpen && my.onSocketOpen(cb),
+      onMessage: (cb) => my.onSocketMessage && my.onSocketMessage(cb),
+      onClose: (cb) => my.onSocketClose && my.onSocketClose(cb),
+      onError: (cb) => my.onSocketError && my.onSocketError(cb),
+      send: (m) => my.sendSocketMessage && my.sendSocketMessage(m),
+      close: (m) => my.closeSocket && my.closeSocket(m),
+    }
+  }
 }
 
 module.exports = { globalOf, apiOf }

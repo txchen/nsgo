@@ -22,6 +22,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/websocket"
 )
 
 // session is how dev builds and shows one target. start runs after each
@@ -317,13 +319,16 @@ func automationTargetError(target, goos string, release bool) error {
 	if target == "android" {
 		return nil
 	}
+	if _, ok := miniProgramPlatformOf(target); ok {
+		return nil
+	}
 	if goos == "darwin" {
 		switch target {
 		case "native", "ios", "tvos", "watchos", "ios_simulator", "tvos_simulator", "watchos_simulator":
 			return nil
 		}
 	}
-	return errors.New("-automation drives macOS, Android and Apple devices and simulators so far: use -target android, or run it on a Mac with -target native, ios, tvos, watchos, ios_simulator, tvos_simulator or watchos_simulator (docs/roadmap.md, Automation)")
+	return errors.New("-automation drives macOS, Android, Apple devices and simulators, and mini programs so far: use -target android or -target miniprogram_wechat, miniprogram_qq, miniprogram_alipay or miniprogram_douyin, or run it on a Mac with -target native, ios, tvos, watchos, ios_simulator, tvos_simulator or watchos_simulator (docs/roadmap.md, Automation)")
 }
 
 // prepareDev sets what dev's builds carry: the dev client, -trace's commits, -highlight's outlines, -layout's audit, -automation's agent and the dev icons; -release strips them as nsgo build does.
@@ -732,13 +737,14 @@ func (s *devServer) send(kind, text string) {
 	}
 }
 
-// events streams the server's events to an app or a page. The app's DevTools stream, ?devtools, carries the tools' requests as automation events too under -automation (automation.go).
+// events streams the server's events to an app or a page, over Server-Sent Events or a WebSocket upgrade (for mini programs, which lack browser EventSource and fetch streaming). The app's DevTools stream, ?devtools, carries the tools' requests as automation events too under -automation (automation.go).
 func (s *devServer) events(w http.ResponseWriter, r *http.Request) {
 	var requests chan []byte
 	s.mu.Lock()
 	hub := s.hub
 	s.mu.Unlock()
-	if hub != nil && r.URL.Query().Has("devtools") {
+	devtoolsStream := r.URL.Query().Has("devtools")
+	if hub != nil && devtoolsStream {
 		var done func()
 		var status int
 		if requests, done, status = hub.connect(); status != 0 {
@@ -746,6 +752,10 @@ func (s *devServer) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer done()
+	}
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		s.eventsWS(w, r, requests, devtoolsStream, hub != nil)
+		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -788,6 +798,69 @@ func (s *devServer) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// eventsWS serves /_nsgo/events over a WebSocket connection for mini programs.
+// Host and token checks (ownHost, devServer.handle) and hub.connect already ran before upgrade.
+func (s *devServer) eventsWS(w http.ResponseWriter, r *http.Request, requests chan []byte, devtoolsStream, fromApp bool) {
+	wsSrv := websocket.Server{
+		Handshake: func(*websocket.Config, *http.Request) error { return nil },
+		Handler: func(ws *websocket.Conn) {
+			if fromApp {
+				ws.MaxPayloadBytes = maxAnswer
+			} else {
+				ws.MaxPayloadBytes = maxMessage
+			}
+			ch := make(chan string, 8)
+			s.mu.Lock()
+			s.clients[ch] = true
+			last := s.last
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.clients, ch)
+				s.mu.Unlock()
+			}()
+			closed := make(chan struct{})
+			go func() {
+				defer close(closed)
+				for {
+					var msg string
+					if err := websocket.Message.Receive(ws, &msg); err != nil {
+						return
+					}
+					if devtoolsStream && msg != "" {
+						s.deliverDevToolsOut(strings.NewReader(msg), fromApp)
+					}
+				}
+			}()
+			if err := websocket.Message.Send(ws, "hello"); err != nil {
+				return
+			}
+			if last != "" {
+				if err := websocket.Message.Send(ws, last); err != nil {
+					return
+				}
+			}
+			for {
+				select {
+				case msg := <-ch:
+					if err := websocket.Message.Send(ws, msg); err != nil {
+						return
+					}
+				case req := <-requests:
+					if err := websocket.Message.Send(ws, "automation "+string(req)); err != nil {
+						return
+					}
+				case <-closed:
+					return
+				case <-r.Context().Done():
+					return
+				}
+			}
+		},
+	}
+	wsSrv.ServeHTTP(w, r)
+}
+
 // sessionFor picks how dev builds and shows nsgo.yaml's target.
 func sessionFor(p *project, opts devOptions) (session, error) {
 	if opts.clip != "" {
@@ -821,7 +894,7 @@ func sessionFor(p *project, opts devOptions) (session, error) {
 		return androidSession(opts), nil
 	default:
 		if mp, ok := miniProgramPlatformOf(p.Dev.Target); ok {
-			return miniprogramSession(mp), nil
+			return miniprogramSession(mp, opts), nil
 		}
 		return session{}, fmt.Errorf("unknown dev target %q; use native, web, ios, ios_simulator, tvos, tvos_simulator, watchos, watchos_simulator, android or %s",
 			p.Dev.Target, strings.Join(miniProgramTargets(), ", "))
