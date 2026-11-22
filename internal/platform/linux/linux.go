@@ -111,7 +111,10 @@ type window struct {
 	kind       driver.SurfaceKind
 	hideOnBlur bool
 	visible    bool
-	focused    bool
+	// showFirst waits for the first mount batch before presenting a newly
+	// opened window or panel, so GTK does not map an empty window first.
+	showFirst firstShow
+	focused   bool
 	// noActivate keeps a panel from the focus (SurfaceConfig.NoActivate), which X11 does by leaving it unmanaged: no window manager places, decorates or focuses it. anchorBounds and panelSide are where core.Window.ShowAt last placed it, panelSide WindowPlaceDefault for nowhere.
 	noActivate   bool
 	unmanaged    bool
@@ -297,6 +300,8 @@ type window struct {
 	alertingID   uint32
 	alertShown   driver.AlertConfig // the alert showing, for a test host
 	menuCounter  uint32
+	menuModel    uintptr
+	menuTree     []gtkMenuNode
 	actionGroup  uintptr
 	actionRefs   map[uintptr]menuRef
 	// building names the action group, prefix and refs the menu being
@@ -421,6 +426,8 @@ func start(app engine.App, opts Options) (*window, error) {
 	w.startEngine(app, opts, driver.Size{Width: opts.Width, Height: opts.Height})
 	w.loop = gMainLoopNew(0, 0)
 	w.setupSettings()
+	// Shown once its first batch is applied (presentFirst), as on macOS.
+	w.showFirst.arm(opts.Hidden)
 	return w, nil
 }
 
@@ -508,7 +515,6 @@ func (w *window) openSurface(cfg driver.SurfaceConfig) {
 	child.createWindow(opts)
 	child.applyLook(opts)
 	child.setupSettings()
-	child.visible = !opts.Hidden
 	if cfg.Kind == driver.SurfacePanel {
 		// A borderless window that takes its own keyboard focus, GTK having no panel that does so without activating.
 		gtkWindowSetDecorated(child.win, 0)
@@ -537,9 +543,8 @@ func (w *window) openSurface(cfg driver.SurfaceConfig) {
 	child.engine.Resize(size, driver.Geometry{})
 	child.engine.SetEnvironment(child.env)
 	child.reportFrameWindow(child.env)
-	if !opts.Hidden {
-		gtkWindowPresent(child.win)
-	}
+	// Shown with its first batch (presentFirst), as on macOS.
+	child.showFirst.arm(opts.Hidden)
 }
 
 // View is an app in a GtkWidget of an embedding host's window, which the
@@ -668,11 +673,8 @@ func (w *window) portalParentWindow() string {
 	return formatX11ParentWindow(uint64(gdkX11SurfaceGetXID(surface)))
 }
 
-// run presents the window and runs GTK's main loop until it closes.
+// run runs GTK's main loop until the window closes.
 func (w *window) run() {
-	if !w.opts.Hidden {
-		gtkWindowPresent(w.win)
-	}
 	gMainLoopRun(w.loop)
 }
 
@@ -682,6 +684,7 @@ func (w *window) stop() {
 	if !w.closing {
 		w.engine.Close()
 	}
+	w.clearMenuBar()
 	w.closeNatives()
 	w.closeEditors()
 	// The windows the app opened that are still open go with it as WindowDestroy takes them, which a stopped engine no longer sends: left, their editors' CSS providers stay on the whole display.
@@ -904,6 +907,7 @@ func (w *window) shutdown(forced bool) {
 
 // destroy ends an opened surface once its tree is gone (WindowDestroy): its views, its window and the handle its callbacks find it by go with it.
 func (w *window) destroy() {
+	w.showFirst.cancel()
 	if w.testID != 0 {
 		delete(w.opts.test.windows, w.testID)
 	}
@@ -924,6 +928,7 @@ func (w *window) releaseSurface() {
 	}
 	clear(w.layouts)
 	w.layouts = nil
+	w.clearMenuBar()
 	for _, v := range w.views {
 		if v != nil {
 			w.delete(v)
@@ -1420,6 +1425,24 @@ func (w *window) apply(b *driver.MountBatch) {
 	w.hoverViews()
 	w.updatePointerCursor()
 	w.refreshSelection()
+	if w.showFirst.consume(w.closing) {
+		w.presentFirst()
+	}
+}
+
+// presentFirst shows an opened window or panel once its first mount batch has
+// been applied, so GTK maps it with its title, menu bar and views in place.
+func (w *window) presentFirst() {
+	if w.win == 0 {
+		return
+	}
+	if w.kind == driver.SurfacePanel {
+		w.showPanel(w.anchorBounds, w.panelSide)
+		return
+	}
+	w.visible = true
+	gtkWidgetSetVisible(w.win, 1)
+	gtkWindowPresent(w.win)
 }
 
 func (w *window) create(id driver.NodeID, kind driver.ViewKind) {
@@ -1495,6 +1518,7 @@ func (w *window) delete(v *view) {
 
 // windowCommand carries out a Window item.
 func (w *window) windowCommand(c *driver.WindowCommand) {
+	w.showFirst.command(c.Action)
 	switch c.Action {
 	case driver.WindowSetTitleBar:
 		w.chrome.titleBar = c.TitleBar

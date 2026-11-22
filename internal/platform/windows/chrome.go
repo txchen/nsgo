@@ -3,7 +3,7 @@
 package windows
 
 import (
-	"strings"
+	"runtime"
 	"unicode"
 	"unsafe"
 
@@ -43,6 +43,9 @@ var (
 	createMenu             = user32.NewProc("CreateMenu")
 	createPopupMenu        = user32.NewProc("CreatePopupMenu")
 	appendMenuW            = user32.NewProc("AppendMenuW")
+	insertMenuItemW        = user32.NewProc("InsertMenuItemW")
+	setMenuItemInfoW       = user32.NewProc("SetMenuItemInfoW")
+	deleteMenu             = user32.NewProc("DeleteMenu")
 	setMenu                = user32.NewProc("SetMenu")
 	destroyMenu            = user32.NewProc("DestroyMenu")
 	drawMenuBar            = user32.NewProc("DrawMenuBar")
@@ -174,6 +177,7 @@ type chrome struct {
 
 	menu    []driver.MenuEntry // nil: no menu bar, Windows' default
 	bar     uintptr
+	tree    []winMenuItem      // the items currently in bar, for in-place updates
 	entries []menuRef          // the bar's commands; a command's id is its index + 1
 	keys    map[string]menuRef // the menu's shortcuts
 	// menuBar says when the bar shows; with MenuBarAutoHide, revealed is
@@ -181,13 +185,6 @@ type chrome struct {
 	// and altAlone while Alt is down with no other key.
 	menuBar                      driver.MenuBarMode
 	revealed, menuOpen, altAlone bool
-}
-
-// menuRef is a menu item's ID and role.
-type menuRef struct {
-	id        uint32
-	role      driver.MenuRole
-	notInText bool
 }
 
 // hidden reports whether the title bar is hidden now: full screen has
@@ -270,6 +267,7 @@ func (w *window) chromeChanged() {
 
 // windowCommand carries out an ItemWindow.
 func (w *window) windowCommand(c *driver.WindowCommand) {
+	w.showFirst.command(c.Action)
 	switch c.Action {
 	case driver.WindowDestroy:
 		if w.testID != 0 {
@@ -442,6 +440,7 @@ func (w *window) minMaxInfo(lParam uintptr) {
 
 func (w *window) minimize() {
 	if !w.chrome.constraints.NoMinimize {
+		w.showFirst.cancel()
 		showWindow.Call(w.hwnd, swMinimize)
 	}
 }
@@ -451,8 +450,12 @@ func (w *window) toggleMaximize() {
 		return
 	}
 	if w.zoomed() {
+		w.showFirst.cancel()
+		w.visible = true
 		showWindow.Call(w.hwnd, swRestore)
 	} else if !w.chrome.constraints.NoMaximize {
+		w.showFirst.cancel()
+		w.visible = true
 		showWindow.Call(w.hwnd, swMaximize)
 	}
 }
@@ -906,28 +909,118 @@ func menuMnemonic(label string) rune {
 	return 0
 }
 
-// showMenuBar shows the application menu as the window's menu bar, unless the title bar is hidden, the window is in full screen, the bar hides until Alt shows it or the window is a hidden root.
+// menuItemInfo is Win32's MENUITEMINFOW.
+type menuItemInfo struct {
+	cbSize, fMask, fType, fState, wID    uint32
+	hSubMenu, hbmpChecked, hbmpUnchecked uintptr
+	dwItemData, dwTypeData               uintptr
+	cch                                  uint32
+	hbmpItem                             uintptr
+}
+
+type win32MenuOps struct{}
+
+func (win32MenuOps) createPopup() uintptr {
+	sub, _, _ := createPopupMenu.Call()
+	return sub
+}
+
+func (win32MenuOps) insertItem(menu uintptr, pos uint32, it *winMenuItem) {
+	mi := menuItemInfo{
+		cbSize: uint32(unsafe.Sizeof(menuItemInfo{})),
+		fMask:  miimFType,
+		fType:  it.fType(),
+	}
+	var label *uint16
+	switch it.kind {
+	case winMenuSubmenu:
+		label = wide(it.label)
+		mi.fMask |= miimState | miimSubMenu | miimString
+		mi.fState = it.fState()
+		mi.hSubMenu = it.handle
+		mi.dwTypeData = uintptr(unsafe.Pointer(label))
+	case winMenuCommand:
+		label = wide(it.label)
+		mi.fMask |= miimState | miimID | miimString
+		mi.fState = it.fState()
+		mi.wID = it.commandID
+		mi.dwTypeData = uintptr(unsafe.Pointer(label))
+	}
+	insertMenuItemW.Call(menu, uintptr(pos), 1, uintptr(unsafe.Pointer(&mi)))
+	runtime.KeepAlive(label)
+}
+
+func (win32MenuOps) updateItem(menu uintptr, pos uint32, next *winMenuItem, diff winMenuDiff) {
+	mi := menuItemInfo{cbSize: uint32(unsafe.Sizeof(menuItemInfo{}))}
+	if diff.fTypeChanged {
+		mi.fMask |= miimFType
+		mi.fType = next.fType()
+	}
+	if diff.fStateChanged {
+		mi.fMask |= miimState
+		mi.fState = next.fState()
+	}
+	if diff.idChanged {
+		mi.fMask |= miimID
+		mi.wID = next.commandID
+	}
+	var label *uint16
+	if diff.labelChanged {
+		label = wide(next.label)
+		mi.fMask |= miimString
+		mi.dwTypeData = uintptr(unsafe.Pointer(label))
+	}
+	if mi.fMask != 0 {
+		setMenuItemInfoW.Call(menu, uintptr(pos), 1, uintptr(unsafe.Pointer(&mi)))
+		runtime.KeepAlive(label)
+	}
+}
+
+func (win32MenuOps) deleteItem(menu uintptr, pos uint32) {
+	deleteMenu.Call(menu, uintptr(pos), mfByPosition)
+}
+
+// showMenuBar shows the application menu as the window's menu bar, updating
+// an existing bar in place so setting the menu again (such as checking an
+// item) neither flickers the bar nor tears down open submenus. No bar shows
+// while the title bar is hidden, the window is in full screen, the bar hides
+// until Alt shows it, the window is transparent or it is a hidden root.
 func (w *window) showMenuBar() {
 	c := &w.chrome
-	c.entries = nil
-	var bar uintptr
 	shown := c.menuBar == driver.MenuBarShown || c.revealed || c.menuOpen
 	// A hidden root only ever shows as an app-modal alert's window (showAlertWindow), which must not offer the app's menus while the alert waits.
 	hiddenRoot := w.primary && w.opts.Hidden
-	if c.menu != nil && c.titleBar == driver.TitleBarDefault && !c.fullScreen && shown && !hiddenRoot && !w.transparent {
-		bar, _, _ = createMenu.Call()
-		if bar != 0 {
-			w.appendMenu(bar, c.menu)
+	want := c.menu != nil && c.titleBar == driver.TitleBarDefault && !c.fullScreen && shown && !hiddenRoot && !w.transparent
+	if !want {
+		c.entries, c.tree = nil, nil
+		if c.bar == 0 {
+			return
 		}
-	}
-	if bar == 0 && c.bar == 0 {
+		setMenu.Call(w.hwnd, 0)
+		destroyMenu.Call(c.bar)
+		c.bar = 0
+		drawMenuBar.Call(w.hwnd)
 		return
 	}
-	setMenu.Call(w.hwnd, bar)
+	var refs []menuRef
+	next := buildWinMenuTree(c.menu, w.language, w.rtl, speakAvailable(), &refs)
+	c.entries = refs
 	if c.bar != 0 {
-		destroyMenu.Call(c.bar)
+		changedTop := syncWinMenu(win32MenuOps{}, c.bar, c.tree, next)
+		c.tree = next
+		if changedTop {
+			drawMenuBar.Call(w.hwnd)
+		}
+		return
 	}
-	c.bar = bar
+	bar, _, _ := createMenu.Call()
+	if bar == 0 {
+		c.entries, c.tree = nil, nil
+		return
+	}
+	syncWinMenu(win32MenuOps{}, bar, nil, next)
+	c.bar, c.tree = bar, next
+	setMenu.Call(w.hwnd, bar)
 	drawMenuBar.Call(w.hwnd)
 }
 
@@ -949,91 +1042,11 @@ func (w *window) popupFlags() uintptr {
 	return tpmReturnCmd | tpmRightButton
 }
 
-// appendMenu appends entries to the menu bar's menu, numbering their
-// commands.
-func (w *window) appendMenu(menu uintptr, entries []driver.MenuEntry) {
-	w.appendMenuTo(menu, entries, &w.chrome.entries)
-}
-
 // appendMenuTo appends entries to menu, numbering their commands by their index in refs plus one, and returns how many items it appended. A separator goes between items only, so the roles Windows leaves out leave no separator at either end, and a submenu left with no items is left out too.
 func (w *window) appendMenuTo(menu uintptr, entries []driver.MenuEntry, refs *[]menuRef) int {
-	n, separate := 0, false
-	for i := range entries {
-		e := &entries[i]
-		switch {
-		case e.Separator:
-			separate = n > 0
-			continue
-		case driver.MenuRoleUnsupported(e.Role, driver.OSWindows, speakAvailable()), e.Role.HoldsMenu() && len(e.Items) == 0:
-			continue
-		}
-		label := strings.ReplaceAll(menutext.Label(w.language, e, ""), "&", "&&")
-		flags := w.menuFlags()
-		if e.Disabled {
-			flags |= mfGrayed
-		}
-		var sub uintptr
-		if len(e.Items) > 0 {
-			sub, _, _ = createPopupMenu.Call()
-			if sub == 0 {
-				continue
-			}
-			if w.appendMenuTo(sub, e.Items, refs) == 0 {
-				destroyMenu.Call(sub)
-				continue
-			}
-		}
-		if separate {
-			appendMenuW.Call(menu, mfSeparator, 0, 0)
-			separate = false
-		}
-		if sub != 0 {
-			appendMenuW.Call(menu, flags|mfPopup, sub, uintptr(unsafe.Pointer(wide(label))))
-		} else {
-			if k := shortcutOf(e); k != "" {
-				label += "\t" + shortcutLabel(k)
-			}
-			if e.Checked {
-				flags |= mfChecked
-			}
-			if e.Radio {
-				flags |= mfRadioCheck
-			}
-			*refs = append(*refs, menuRef{e.ID, e.Role, e.NotInText})
-			appendMenuW.Call(menu, flags, uintptr(len(*refs)), uintptr(unsafe.Pointer(wide(label))))
-		}
-		n++
-	}
-	return n
-}
-
-// shortcutLabel shows a normalized shortcut as Windows' menus do, such
-// as "Ctrl+Shift+N".
-func shortcutLabel(key string) string {
-	parts := strings.Split(key, "+")
-	for i, part := range parts {
-		switch part {
-		case "mod", "ctrl":
-			parts[i] = "Ctrl"
-		case "alt":
-			parts[i] = "Alt"
-		case "shift":
-			parts[i] = "Shift"
-		case "meta":
-			parts[i] = "Win"
-		case "pageup":
-			parts[i] = "PgUp"
-		case "pagedown":
-			parts[i] = "PgDn"
-		case "delete":
-			parts[i] = "Del"
-		case "escape":
-			parts[i] = "Esc"
-		default:
-			parts[i] = strings.ToUpper(part[:1]) + part[1:]
-		}
-	}
-	return strings.Join(parts, "+")
+	tree := buildWinMenuTree(entries, w.language, w.rtl, speakAvailable(), refs)
+	syncWinMenu(win32MenuOps{}, menu, nil, tree)
+	return len(tree)
 }
 
 // menuCommand handles a WM_COMMAND from the menu bar.
