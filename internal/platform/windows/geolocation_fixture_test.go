@@ -25,6 +25,7 @@ func TestGeolocationLateCompletionAfterCancel(t *testing.T) {
 	var completion *comHandler
 	var infoTable, opTable, locatorTable [128]uintptr
 	infoTable[2] = syscall.NewCallback(func(uintptr) uintptr { return 0 })
+	infoTable[1] = syscall.NewCallback(func(uintptr) uintptr { return 1 })
 	infoTable[9] = syscall.NewCallback(func(uintptr) uintptr { cancels.Add(1); return 0 })
 	infoTable[10] = syscall.NewCallback(func(uintptr) uintptr { closes.Add(1); return 0 })
 	info := &comObject{vtbl: &infoTable}
@@ -34,6 +35,7 @@ func TestGeolocationLateCompletionAfterCancel(t *testing.T) {
 		return 0
 	})
 	opTable[2] = syscall.NewCallback(func(uintptr) uintptr { opReleases.Add(1); return 0 })
+	opTable[1] = syscall.NewCallback(func(uintptr) uintptr { return 1 })
 	opTable[6] = syscall.NewCallback(func(_ uintptr, handler uintptr) uintptr {
 		completion = (*comHandler)(unsafe.Pointer(handler))
 		handlerAddRef(completion)
