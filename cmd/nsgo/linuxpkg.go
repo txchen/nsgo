@@ -22,7 +22,8 @@ import (
 // other files are, since dpkg and pacman read the package's name and
 // version from inside it. Both install the package's
 // directory in /opt/<slug>, a link to the app in /usr/bin and one to each
-// of its commands, its desktop entry and its icon in the hicolor theme.
+// of its commands, its desktop entry, its AppStream metadata, its icon in
+// the hicolor theme and the files of linux.share under /usr/share.
 
 // linuxPackageEntry is a file, directory or link a Linux package
 // installs, by its path from the root.
@@ -220,6 +221,10 @@ func linuxPackageFiles(p *project, dir string) ([]linuxPackageEntry, error) {
 		files = append(files, linuxPackageEntry{name: "usr/bin/" + name, link: "/" + opt + "/" + name, mode: 0o777})
 	}
 
+	share, err := p.linuxShareFiles()
+	if err != nil {
+		return nil, err
+	}
 	n, err := p.appNames()
 	if err != nil {
 		return nil, err
@@ -252,7 +257,72 @@ func linuxPackageFiles(p *project, dir string) ([]linuxPackageEntry, error) {
 			add(fmt.Sprintf("usr/share/icons/hicolor/%dx%d/apps/%s.png", size, size, p.ID), scaledPNG(img, size), 0o644)
 		}
 	}
+	if err := p.addLinuxShare(share, files, func(e linuxPackageEntry) { add(e.name, e.data, e.mode) }); err != nil {
+		return nil, err
+	}
 	return files, nil
+}
+
+// linuxShareFiles are the files of linux.share, by their paths in the
+// system's usr/share, each regular file executable or not as it is there.
+func (p *project) linuxShareFiles() ([]linuxPackageEntry, error) {
+	if p.Linux.Share == "" {
+		return nil, nil
+	}
+	info, err := os.Stat(p.Linux.Share)
+	if err != nil {
+		return nil, fmt.Errorf("linux.share: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("linux.share: %s is not a directory", rel(p.Linux.Share))
+	}
+	var files []linuxPackageEntry
+	err = filepath.WalkDir(p.Linux.Share, func(file string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("linux.share: %s is not a regular file", rel(file))
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		mode := int64(0o644)
+		if info.Mode()&0o111 != 0 {
+			mode = 0o755
+		}
+		name, _ := filepath.Rel(p.Linux.Share, file)
+		files = append(files, linuxPackageEntry{name: "usr/share/" + filepath.ToSlash(name), data: data, mode: mode})
+		return nil
+	})
+	return files, err
+}
+
+// addLinuxShare adds the AppStream metadata, unless share or files hold the app's own, and share's files to a package whose entries so far are files, through add. A file of share at a path the package holds already, such as the desktop entry or an icon NSGo writes, is refused.
+func (p *project) addLinuxShare(share, files []linuxPackageEntry, add func(linuxPackageEntry)) error {
+	metainfo := "usr/share/metainfo/" + p.ID + ".metainfo.xml"
+	named := func(name string) func(linuxPackageEntry) bool {
+		return func(e linuxPackageEntry) bool { return e.name == name && !e.dir }
+	}
+	if !slices.ContainsFunc(share, named(metainfo)) && !slices.ContainsFunc(files, named(metainfo)) {
+		data, err := p.metainfo()
+		if err != nil {
+			return err
+		}
+		share = append([]linuxPackageEntry{{name: metainfo, data: data, mode: 0o644}}, share...)
+	}
+	for _, e := range share {
+		if slices.ContainsFunc(files, named(e.name)) {
+			return fmt.Errorf("linux.share's %s collides with a file the package holds already", strings.TrimPrefix(e.name, "usr/share/"))
+		}
+		add(e)
+	}
+	return nil
 }
 
 // linuxPackageSize is how many bytes the files take installed.

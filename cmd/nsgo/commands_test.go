@@ -403,18 +403,47 @@ func TestNSISScriptCommands(t *testing.T) {
 	if !strings.Contains(plain, `Delete "$INSTDIR\tool.exe"`) {
 		t.Error("the uninstaller leaves the command")
 	}
-	if strings.Contains(plain, "Call UserPath") {
+	// Without windows.path the installer puts nothing on Path, and takes off only the entry an earlier version's installer added.
+	if strings.Contains(plain, "Push \"\"\n  Call UserPath") {
 		t.Error("the installer changes Path without windows.path")
+	}
+	for _, want := range []string{"WriteUninstaller \"$INSTDIR\\Uninstall.exe\"\n  ; An earlier version may have put the folder on Path.\n  Call RemoveOwnedPath\n", "Call un.CloseApp\n  Call un.RemoveOwnedPath\n"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("script without windows.path lacks %q", want)
+		}
 	}
 	p.Windows.Path = true
 	withPath := script()
-	for _, want := range []string{"WriteUninstaller \"$INSTDIR\\Uninstall.exe\"\n  Call UserPath\n", "Call un.CloseApp\n  Call un.UserPath\n"} {
+	const key = `HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\dev.example.app" "NsgoPathAdded"`
+	for _, want := range []string{
+		"WriteUninstaller \"$INSTDIR\\Uninstall.exe\"\n  Push \"\"\n  Call UserPath\n",
+		"Call un.CloseApp\n  Call un.RemoveOwnedPath\n",
+		// The installer records that it added the folder only when the folder was not on Path.
+		"StrCmp $1 \"3\" 0 done\n  WriteRegDWORD " + key + " 1\n",
+		`if (-not $$env:NSGO_PATH_REMOVE) { exit 3 }`,
+		// Removal takes the folder off only with that record, and forgets it.
+		"ReadRegDWORD $0 " + key + "\n  StrCmp $0 \"1\" 0 done\n  Push \"1\"\n  Call ${un}UserPath\n",
+		"removed:\n  DeleteRegValue " + key + "\n",
+	} {
 		if !strings.Contains(withPath, want) {
 			t.Errorf("script lacks %q", want)
 		}
 	}
+	uninstall := withPath[strings.Index(withPath, `Section "Uninstall"`):]
+	if strings.Contains(uninstall, "Call un.UserPath") {
+		t.Error("the uninstaller takes the folder off Path without the installer's record")
+	}
 	if strings.Contains(withPath, "App.com") {
 		t.Error("windows.path adds the command companion")
+	}
+	if compiler := nsisCompiler(); compiler != "" {
+		p.Release = true
+		for _, path := range []bool{false, true} {
+			p.Windows.Path = path
+			if _, err := buildNSIS(t.Context(), p, dir, "x64"); err != nil {
+				t.Errorf("windows.path %v: %v", path, err)
+			}
+		}
 	}
 }
 

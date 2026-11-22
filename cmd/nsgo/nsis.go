@@ -301,13 +301,19 @@ const nsisCloseApp = `$$d = $$env:NSGO_APP_DIR.TrimEnd('\') + '\'; ` +
 
 // nsisUserPath updates the user's Path for the command companion and the
 // app's commands without expanding existing environment references or
-// truncating long values.
+// truncating long values. Adding, it exits 3 when it added the folder,
+// which was not there, so the installer records that it owns the entry
+// (nsisPathOwned).
 const nsisUserPath = `$$d = $$env:NSGO_APP_DIR.TrimEnd('\\'); ` +
 	`$$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment'); ` +
 	`$$p = @(([string]$$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';' | Where-Object { $$_ }); ` +
 	`$$o = @($$p | Where-Object { $$_.TrimEnd('\\') -ne $$d }); ` +
 	`if ($$env:NSGO_PATH_REMOVE) { if ($$o.Count -eq $$p.Count) { exit 0 }; $$p = $$o } else { if ($$o.Count -lt $$p.Count) { exit 0 }; $$p += $$d }; ` +
-	`if ($$p.Count) { $$k.SetValue('Path', ($$p -join ';'), 'ExpandString') } else { $$k.DeleteValue('Path', $$false) }`
+	`if ($$p.Count) { $$k.SetValue('Path', ($$p -join ';'), 'ExpandString') } else { $$k.DeleteValue('Path', $$false) }; ` +
+	`if (-not $$env:NSGO_PATH_REMOVE) { exit 3 }`
+
+// nsisPathOwned is the uninstall entry's value recording that an installer put the app's folder on the user's Path, which stays through upgrades, so the uninstaller, or an upgrade that no longer puts it there, takes off only an entry an installer added, never one the user had.
+const nsisPathOwned = "NsgoPathAdded"
 
 var nsisTemplate = template.Must(template.New("nsi").Funcs(template.FuncMap{
 	"q": nsisString,
@@ -321,10 +327,11 @@ var nsisTemplate = template.Must(template.New("nsi").Funcs(template.FuncMap{
 	"cmd": func(parts ...string) string {
 		return "'" + strings.ReplaceAll(strings.Join(parts, ""), "'", `$\'`) + "'"
 	},
-	"quad":     nsisVersion,
-	"close":    func() string { return nsisCloseApp },
-	"userPath": func() string { return nsisUserPath },
-	"amp":      func(s string) string { return strings.ReplaceAll(s, "&", "&&") },
+	"quad":      nsisVersion,
+	"close":     func() string { return nsisCloseApp },
+	"userPath":  func() string { return nsisUserPath },
+	"pathOwned": func() string { return nsisPathOwned },
+	"amp":       func(s string) string { return strings.ReplaceAll(s, "&", "&&") },
 }).Parse(`; Written by nsgo build. Compile with NSIS 3.06 or later: makensis -INPUTCHARSET UTF8 {{.Exe}}.nsi
 Unicode true
 ; RemoveFileTypes keeps an extension's key while it holds another app's values, and DeleteRegKey /ifempty only checks values from NSIS 3.06: an older compiler's uninstaller would delete them.
@@ -466,11 +473,11 @@ FunctionEnd
 !macroend
 !insertmacro RemoveFileTypes ""
 !insertmacro RemoveFileTypes "un."
-{{- if .Command}}
 
-; Put the app's folder, with its command companion and commands, on the user's Path and remove it on uninstall.
+; Put the app's folder, with its command companion and commands, on the user's Path, or take it off ($R0 "1"), and record in the uninstall entry whether an installer added it.
 !macro UserPath un
 Function ${un}UserPath
+  Exch $R0
   Push $0
   Push $1
   StrCpy $0 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
@@ -478,20 +485,43 @@ Function ${un}UserPath
   StrCpy $0 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   IfFileExists $0 0 done
   System::Call 'Kernel32::SetEnvironmentVariable(t "NSGO_APP_DIR", t "$INSTDIR")'
-!if "${un}" == "un."
-  System::Call 'Kernel32::SetEnvironmentVariable(t "NSGO_PATH_REMOVE", t "1")'
-!endif
+  System::Call 'Kernel32::SetEnvironmentVariable(t "NSGO_PATH_REMOVE", t "$R0")'
   nsExec::Exec ` + "`" + `"$0" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{userPath}}"` + "`" + `
   Pop $1
+  StrCmp $R0 "1" removed
+  ; A folder already on Path is the user's, or an earlier installer's, whose record stays.
+  StrCmp $1 "3" 0 done
+  WriteRegDWORD HKCU {{q .UninstallKey}} "{{pathOwned}}" 1
+  Goto changed
+  removed:
+  DeleteRegValue HKCU {{q .UninstallKey}} "{{pathOwned}}"
+  changed:
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
   done:
   Pop $1
   Pop $0
+  Pop $R0
 FunctionEnd
 !macroend
 !insertmacro UserPath ""
 !insertmacro UserPath "un."
+
+; Take the folder off the user's Path if an installer put it there.
+!macro RemoveOwnedPath un
+Function ${un}RemoveOwnedPath
+  Push $0
+  ReadRegDWORD $0 HKCU {{q .UninstallKey}} "{{pathOwned}}"
+  StrCmp $0 "1" 0 done
+  Push "1"
+  Call ${un}UserPath
+  done:
+  Pop $0
+FunctionEnd
+!macroend
+{{- if not .Command}}
+!insertmacro RemoveOwnedPath ""
 {{- end}}
+!insertmacro RemoveOwnedPath "un."
 
 Section
   Call CloseApp
@@ -499,7 +529,11 @@ Section
   File /r{{range .Excludes}} /x {{q .}}{{end}} "*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 {{- if .Command}}
+  Push ""
   Call UserPath
+{{- else}}
+  ; An earlier version may have put the folder on Path.
+  Call RemoveOwnedPath
 {{- end}}
   Call RemoveFileTypes
 {{- range .FileTypes}}
@@ -548,9 +582,7 @@ FunctionEnd
 
 Section "Uninstall"
   Call un.CloseApp
-{{- if .Command}}
-  Call un.UserPath
-{{- end}}
+  Call un.RemoveOwnedPath
   Call un.RemoveFileTypes
   ; Remove the per-user toast COM registration before deleting the EXE.
   ExecWait {{cmd (path "$INSTDIR\\" .Exe) " --nsgo-unregister-toast"}}
