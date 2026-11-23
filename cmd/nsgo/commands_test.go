@@ -403,8 +403,8 @@ func TestNSISScriptCommands(t *testing.T) {
 	if !strings.Contains(plain, `Delete "$INSTDIR\tool.exe"`) {
 		t.Error("the uninstaller leaves the command")
 	}
-	// Without windows.path the installer puts nothing on Path, and takes off only the entry an earlier version's installer added.
-	if strings.Contains(plain, "Push \"\"\n  Call UserPath") {
+	// Without windows.path the installer puts nothing on Path, and takes off only the folder an earlier version's installer added.
+	if strings.Contains(plain, "Call AddUserPath") || strings.Contains(plain, "Function AddUserPath") {
 		t.Error("the installer changes Path without windows.path")
 	}
 	for _, want := range []string{"WriteUninstaller \"$INSTDIR\\Uninstall.exe\"\n  ; An earlier version may have put the folder on Path.\n  Call RemoveOwnedPath\n", "Call un.CloseApp\n  Call un.RemoveOwnedPath\n"} {
@@ -414,24 +414,41 @@ func TestNSISScriptCommands(t *testing.T) {
 	}
 	p.Windows.Path = true
 	withPath := script()
-	const key = `HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\dev.example.app" "NsgoPathAdded"`
-	for _, want := range []string{
-		"WriteUninstaller \"$INSTDIR\\Uninstall.exe\"\n  Push \"\"\n  Call UserPath\n",
-		"Call un.CloseApp\n  Call un.RemoveOwnedPath\n",
-		// The installer records that it added the folder only when the folder was not on Path.
-		"StrCmp $1 \"3\" 0 done\n  WriteRegDWORD " + key + " 1\n",
-		`if (-not $$env:NSGO_PATH_REMOVE) { exit 3 }`,
-		// Removal takes the folder off only with that record, and forgets it.
-		"ReadRegDWORD $0 " + key + "\n  StrCmp $0 \"1\" 0 done\n  Push \"1\"\n  Call ${un}UserPath\n",
-		"removed:\n  DeleteRegValue " + key + "\n",
-	} {
-		if !strings.Contains(withPath, want) {
-			t.Errorf("script lacks %q", want)
+	const key = `HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\dev.example.app"`
+	function := func(name string) string {
+		i := strings.Index(withPath, "Function "+name+"\n")
+		if i < 0 {
+			t.Fatalf("script lacks %s", name)
 		}
+		return withPath[i : i+strings.Index(withPath[i:], "FunctionEnd")]
+	}
+	add, remove := function("AddUserPath"), function("${un}RemoveOwnedPath")
+	for _, c := range []struct{ scenario, in, want string }{
+		// An upgrade to the folder the record names keeps the record and the entry, which is on Path already.
+		{"same-folder upgrade", add, "ReadRegStr $R0 " + key + ` "NsgoPathAddedDir"` + "\n  StrCmp $R0 $INSTDIR same_folder\n  Call RemoveOwnedPath\n  same_folder:\n"},
+		// An upgrade to another folder takes the recorded folder off first, then adds the new one.
+		{"changed-folder upgrade", remove, "ReadRegStr $R0 " + key + ` "NsgoPathAddedDir"` + "\n  StrCmp $R0 \"\" done\n  StrCpy $R1 \"1\"\n  Call ${un}UserPath\n  DeleteRegValue " + key + ` "NsgoPathAddedDir"` + "\n"},
+		// A folder on Path already, the user's, is never recorded: only an add the script reports, exit code 3, is.
+		{"pre-existing entry", add, "StrCpy $R0 $INSTDIR\n  StrCpy $R1 \"\"\n  Call UserPath\n  StrCmp $R2 \"3\" 0 done\n  WriteRegStr " + key + ` "NsgoPathAddedDir" $INSTDIR` + "\n"},
+		{"pre-existing entry", withPath, `if ($$o.Count -lt $$p.Count) { exit 0 }`},
+		{"pre-existing entry", withPath, `if (-not $$env:NSGO_PATH_REMOVE) { exit 3 }`},
+		// The uninstaller takes off the recorded folder alone, which the script compares exactly.
+		{"uninstall", withPath, "Call un.CloseApp\n  Call un.RemoveOwnedPath\n"},
+		{"uninstall", withPath, `SetEnvironmentVariable(t "NSGO_APP_DIR", t "$R0")`},
+		// The Boolean record of earlier installers says no folder, so it is dropped and its folder stays.
+		{"migration", remove, "DeleteRegValue " + key + ` "NsgoPathAdded"` + "\n  ReadRegStr $R0"},
+		{"migration", add, "same_folder:\n  DeleteRegValue " + key + ` "NsgoPathAdded"` + "\n"},
+	} {
+		if !strings.Contains(c.in, c.want) {
+			t.Errorf("%s: script lacks %q", c.scenario, c.want)
+		}
+	}
+	if strings.Contains(withPath, `"NsgoPathAdded" 1`) || strings.Count(withPath, "WriteRegStr "+key+` "NsgoPathAddedDir"`) != 1 {
+		t.Error("the installer records ownership other than by the folder it added")
 	}
 	uninstall := withPath[strings.Index(withPath, `Section "Uninstall"`):]
 	if strings.Contains(uninstall, "Call un.UserPath") {
-		t.Error("the uninstaller takes the folder off Path without the installer's record")
+		t.Error("the uninstaller takes a folder off Path without the installer's record")
 	}
 	if strings.Contains(withPath, "App.com") {
 		t.Error("windows.path adds the command companion")
